@@ -93,6 +93,45 @@ const paperEl = $("paper");
 const DRAFT_KEY = nickname ? `resumeDraft:${nickname}` : "resumeDraft:anon";
 const HIST_KEY = "resumeHistory";
 
+// Ensure we always use the current unlockedNickname (sessionStorage may change after module load)
+function getEffectiveNickname() {
+  try {
+    return (
+      sessionStorage.getItem('unlockedNickname') ||
+      (rawProfile ? (safeParseJSON(rawProfile, {})?.nickname) : null) ||
+      (rawProfile ? (safeParseJSON(rawProfile, {})?.fullName) : null) ||
+      'anon'
+    );
+  } catch (e) {
+    return 'anon';
+  }
+}
+function getDraftKey() {
+  return `resumeDraft:${getEffectiveNickname()}`;
+}
+
+// Override loadDraft/saveDraft to use dynamic draft key
+function loadDraft() {
+  try {
+    const key = getDraftKey();
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return defaultDraft();
+    return safeParseJSON(raw, defaultDraft());
+  } catch (e) {
+    console.warn('loadDraft error', e);
+    return defaultDraft();
+  }
+}
+
+function saveDraft(draftObj) {
+  try {
+    const key = getDraftKey();
+    sessionStorage.setItem(key, JSON.stringify(draftObj));
+  } catch (e) {
+    console.warn('saveDraft error', e);
+  }
+}
+
 function nowISO() {
   return new Date().toISOString();
 }
@@ -118,22 +157,34 @@ function defaultDraft() {
 }
 
 function loadDraft() {
-  const raw = sessionStorage.getItem(DRAFT_KEY);
-  const d = raw ? safeParseJSON(raw, null) : null;
-  if (!d || d.schema !== "resume_draft_v1") return defaultDraft();
-  // normalize
-  if (!Array.isArray(d.scope)) d.scope = [];
-  if (!Array.isArray(d.aiOnlySections)) d.aiOnlySections = [];
-  if (typeof d.htmlOverride !== "string") d.htmlOverride = "";
-  if (!d.mode) d.mode = "ats";
-  if (!d.template) d.template = "classic";
-  if (typeof d.jd !== "string") d.jd = "";
-  return d;
+  try {
+    const key = getDraftKey();
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return defaultDraft();
+    const d = safeParseJSON(raw, null);
+    if (!d || d.schema !== "resume_draft_v1") return defaultDraft();
+    // normalize
+    if (!Array.isArray(d.scope)) d.scope = [];
+    if (!Array.isArray(d.aiOnlySections)) d.aiOnlySections = [];
+    if (typeof d.htmlOverride !== "string") d.htmlOverride = "";
+    if (!d.mode) d.mode = "ats";
+    if (!d.template) d.template = "classic";
+    if (typeof d.jd !== "string") d.jd = "";
+    return d;
+  } catch (e) {
+    console.warn('loadDraft error', e);
+    return defaultDraft();
+  }
 }
 
 function saveDraft(draft) {
   draft.updatedAt = nowISO();
-  sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  try {
+    const key = getDraftKey();
+    sessionStorage.setItem(key, JSON.stringify(draft));
+  } catch (e) {
+    console.warn('saveDraft error', e);
+  }
 }
 
 function updateEditBadge() {
