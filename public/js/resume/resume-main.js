@@ -672,34 +672,96 @@ async function callGenerateAPI(payload) {
       const scope = typeof getScopeFromUI === 'function' ? getScopeFromUI() : [];
       const profile = rawProfile ? safeParseJSON(rawProfile, null) : null;
 
+      // Read latest unlockedProfile from sessionStorage at click time
+      const rawNow = sessionStorage.getItem('unlockedProfile');
+      if (!rawNow) {
+        setStatus('Locked. Unlock first.', 'err');
+        return;
+      }
+      const currentProfile = safeParseJSON(rawNow, null);
+      if (!currentProfile) {
+        setStatus('Profile parse failed.', 'err');
+        return;
+      }
+
+      const jdNow = $('jd')?.value || '';
+      if (!jdNow.trim()) {
+        setStatus('Paste a job description first.', 'err');
+        return;
+      }
+
       // determine effective nickname (prefer unlockedNickname, then profile, then anon)
-      const effectiveNickname = sessionStorage.getItem('unlockedNickname') || (profile && (profile.nickname || profile.fullName)) || 'anon';
+      const effectiveNickname = sessionStorage.getItem('unlockedNickname') || (currentProfile && (currentProfile.nickname || currentProfile.fullName)) || 'anon';
 
       setStatus('Generating via server...');
-      const result = await callGenerateAPI({ profile, jd, mode, template, scope, nickname: effectiveNickname });
+      const result = await callGenerateAPI({ profile: currentProfile, jd: jdNow, mode, template, scope, nickname: effectiveNickname });
       if (result && result.generated && result.generated.html) {
         // Persist returned HTML into draft and render
-        draft.htmlOverride = result.generated.html;
+        // Clear any previous manual override and render the derived profile (so selected sections show)
+        draft.htmlOverride = "";
         saveDraft(draft);
-        // Ensure immediate visible update even if module scope prevents calling renderWithDraft elsewhere
-        try { if (typeof renderWithDraft === 'function') { renderWithDraft(); } else if (paperEl) { paperEl.innerHTML = result.generated.html; } } catch(e){ if (paperEl) paperEl.innerHTML = result.generated.html; }
-        // Persist using the effective nickname key so drafts are tied to the right user
-        try {
-          const draftKey = `resumeDraft:${effectiveNickname}`;
-          sessionStorage.setItem(draftKey, JSON.stringify(draft));
-        } catch (e) { /* ignore storage errors */ }
-        updateEditBadge();
-        setStatus('Generated (server)');
-        showToast('Generated', 'success', 1600);
+        if (typeof renderWithDraft === 'function') {
+          renderWithDraft();
+        }
 
-        // Optionally add to local history UI if History helper present
+        // Insert AI-generated fragment into a dedicated editable container inside the preview
+        try {
+          const aiContainerId = 'ai-generated-fragment';
+          // remove existing container
+          const old = document.getElementById(aiContainerId);
+          if (old && old.parentNode) old.parentNode.removeChild(old);
+
+          const fragWrap = document.createElement('div');
+          fragWrap.id = aiContainerId;
+          fragWrap.className = 'ai-generated-fragment';
+          fragWrap.style.marginTop = '12px';
+          fragWrap.contentEditable = 'true';
+          fragWrap.spellcheck = false;
+          fragWrap.innerHTML = result.generated.html;
+
+          // append to paperEl so both profile sections and AI fragment are visible
+          if (paperEl) paperEl.appendChild(fragWrap);
+
+          // autosave edits from AI fragment into draft.htmlOverride
+          const saveAiFragment = () => {
+            draft.htmlOverride = (paperEl && paperEl.innerHTML) || fragWrap.innerHTML || '';
+            saveDraft(draft);
+            updateEditBadge();
+          };
+
+          fragWrap.addEventListener('input', () => {
+            // debounce slight
+            if (typeof window.__aiSaveTimeout !== 'undefined') clearTimeout(window.__aiSaveTimeout);
+            window.__aiSaveTimeout = setTimeout(saveAiFragment, 600);
+          });
+
+          // make common text elements contenteditable for immediate inline editing
+          if (paperEl) {
+            paperEl.querySelectorAll('h1,h2,h3,p,li,div').forEach(el => {
+              if (!el.isContentEditable) el.contentEditable = true;
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to insert AI fragment editable container', e);
+          // fallback: ensure preview shows returned HTML
+          if (paperEl) paperEl.innerHTML = result.generated.html;
+        }
+         // Persist using the effective nickname key so drafts are tied to the right user
+         try {
+           const draftKey = `resumeDraft:${effectiveNickname}`;
+           sessionStorage.setItem(draftKey, JSON.stringify(draft));
+         } catch (e) { /* ignore storage errors */ }
+         updateEditBadge();
+         setStatus('Generated (server)');
+         showToast('Generated', 'success', 1600);
+
         if (typeof History !== 'undefined' && History.addHistoryItem) {
           try {
             History.addHistoryItem({
               id: result.id || Date.now(),
               nickname: effectiveNickname,
               date: new Date().toISOString(),
-              jdPreview: jd.slice(0, 140),
+              jdPreview: jdNow.slice(0, 140),
               mode,
               template,
               htmlSnapshot: result.generated.html,
@@ -718,198 +780,3 @@ async function callGenerateAPI(payload) {
     }
   });
 })();
-
-// --------------------
-// Reset edits (remove htmlOverride, keep draft)
-// --------------------
-const btnResetEdits = $("btnResetEdits");
-if (btnResetEdits) {
-  btnResetEdits.addEventListener("click", () => {
-  const ok = confirm("Reset edits? This will discard your manual changes to the preview.");
-    if (!ok) return;
-    draft.htmlOverride = "";
-    saveDraft(draft);
-  updateEditBadge();
-    renderWithDraft();
-  const resetBtn = $("btnResetEdits");
-  flashButton(resetBtn, "warn");
-  showToast("Edits reset", "warn");
-  setStatus("Edits reset (re-rendered from draft data).", "ok");
-  });
-}
-
-// --------------------
-// Save edits (persist manual changes into draft.htmlOverride)
-// --------------------
-const btnSaveEdits = $("btnSaveEdits");
-if (btnSaveEdits) {
-  btnSaveEdits.addEventListener("click", () => {
-    if (!paperEl) return;
-    // Ask user to confirm they want to keep current manual edits
-    const ok = confirm("Save your manual edits to this resume preview? (This will persist the current preview and reuse it until you reset or regenerate.)");
-  if (!ok) return;
-
-  // keep previous for undo
-  lastSavedHtmlOverride = draft.htmlOverride || null;
-  // persist pending edits if present, else use current preview
-  let toSave = pendingHtmlOverride != null ? pendingHtmlOverride : (paperEl.innerHTML || "");
-  // sanitize debug markers if any remained
-  try { toSave = String(toSave).replace(/\s*\[DEBUG\]\s*/g, ' '); } catch (e) {}
-  draft.htmlOverride = toSave;
-  saveDraft(draft);
-  updateEditBadge();
-  // show undo button
-  showUndoButton(!!lastSavedHtmlOverride);
-  // clear pending and unsaved indicator
-  pendingHtmlOverride = null;
-  // remove .unsaved from all buttons to be robust
-  document.querySelectorAll('button.unsaved').forEach(b => b.classList.remove('unsaved'));
-  // suppress autosave for a short window to avoid immediate re-marking
-  ignoreAutosaveUntil = Date.now() + 1200;
-
-  // pulse badge briefly
-  const badge = $("editBadge");
-  if (badge) {
-    badge.classList.add("pulse");
-    setTimeout(() => badge.classList.remove("pulse"), 1400);
-  }
-
-  const saveBtn = $("btnSaveEdits");
-  flashButton(saveBtn, "success");
-  showToast("Saved edits", "success");
-  if (saveBtn) {
-    const orig = saveBtn.textContent;
-    saveBtn.textContent = "Saved ✓";
-    setTimeout(() => (saveBtn.textContent = orig), 1400);
-  }
-
-  setStatus("Manual edits saved. They will persist until reset or next generation.", "ok");
-  });
-}
-
-// Undo last save
-const btnUndoEdits = $("btnUndoEdits");
-if (btnUndoEdits) {
-  btnUndoEdits.addEventListener("click", () => {
-    if (lastSavedHtmlOverride == null) return;
-    const ok = confirm("Undo last saved edits and restore previous preview? This will replace current saved edits.");
-    if (!ok) return;
-    draft.htmlOverride = lastSavedHtmlOverride;
-    lastSavedHtmlOverride = null;
-    saveDraft(draft);
-    updateEditBadge();
-    showUndoButton(false);
-    renderWithDraft();
-  const undoBtn = $("btnUndoEdits");
-  flashButton(undoBtn, "success");
-  showToast("Undo applied", "success");
-  setStatus("Undid last saved edits.", "ok");
-  });
-}
-
-// --------------------
-// Clear draft (fresh start)
-// --------------------
-const btnClearDraft = $("btnClearDraft");
-if (btnClearDraft) {
-  btnClearDraft.addEventListener("click", () => {
-      updateEditBadge();
-    const ok = confirm("Clear draft (JD, scope, AI sections, edits)?");
-    if (!ok) return;
-    draft = defaultDraft();
-    saveDraft(draft);
-
-    // reset UI
-    if ($("jd")) $("jd").value = "";
-    setActive("modes", "data-mode", "ats");
-    setActive("templates", "data-template", "classic");
-
-    const raw = sessionStorage.getItem("unlockedProfile");
-    const profile = raw ? safeParseJSON(raw, { customSections: [] }) : { customSections: [] };
-    renderAiScope(profile);
-    renderWithDraft();
-      updateEditBadge();
-    setStatus("Draft cleared.", "ok");
-  });
-}
-
-// --------------------
-// PDF
-// --------------------
-const btnPdf = $("btnPdf");
-if (btnPdf) {
-  btnPdf.addEventListener("click", () => {
-    const raw = sessionStorage.getItem("unlockedProfile");
-    if (!raw) {
-      setStatus("Locked.", "err");
-      return;
-    }
-    if (!($("jd")?.value || "").trim()) {
-      setStatus("Paste JD first.", "err");
-      return;
-    }
-    // record download event before printing
-    if (typeof History.addHistoryItem === 'function') {
-      // include name and time; the history manager records date itself
-      const jdField = $("jd");
-      const jd = jdField ? jdField.value.trim() : '';
-      History.addHistoryItem({ jd, mode: draft.mode, template: draft.template, name: nickname || '' });
-    }
-    window.print();
-  });
-}
-
-// Edit profile
-const btnEdit = $("btnEdit");
-if (btnEdit) btnEdit.addEventListener("click", () => (window.location.href = "./register.html?edit=1"));
-
-// Clear JD
-const btnClear = $("btnClear");
-if (btnClear) {
-  btnClear.addEventListener("click", () => {
-    const jd = $("jd");
-    if (jd) jd.value = "";
-    draft.jd = "";
-    draft.htmlOverride = "";
-    saveDraft(draft);
-    renderWithDraft();
-    setStatus("Job description cleared.", "ok");
-  });
-}
-
-// Logout
-const btnLogout = $("btnLogout");
-if (btnLogout) {
-  btnLogout.addEventListener("click", () => {
-    sessionStorage.removeItem("unlockedProfile");
-    sessionStorage.removeItem("unlockedNickname");
-    // keep draft key separate — optional: you can clear it too if you want
-    window.location.href = "./index.html";
-  });
-}
-
-// Debug helper: simulate an edit and report whether autosave set the unsaved flag and toast display.
-window.__debug_triggerAutosave = function () {
-  return new Promise((resolve) => {
-    try {
-      const paper = document.getElementById('paper');
-      if (!paper) return resolve({ error: 'paper not found' });
-      // perform a harmless replacement
-      paper.innerHTML = paper.innerHTML.replace('Your Name', 'Your Name [DEBUG]');
-      paper.dispatchEvent(new Event('input', { bubbles: true }));
-
-      // wait slightly longer than autosave debounce
-      setTimeout(() => {
-        const saveBtn = document.getElementById('btnSaveEdits');
-        const toastEl = document.getElementById('toast');
-        resolve({
-          unsaved: !!(saveBtn && saveBtn.classList.contains('unsaved')),
-          toastDisplay: window.getComputedStyle(toastEl || document.body).display,
-          paperSample: (document.getElementById('paper')?.innerText || '').slice(0, 120)
-        });
-      }, 700);
-    } catch (e) {
-      resolve({ error: String(e) });
-    }
-  });
-  };
