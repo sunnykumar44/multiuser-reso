@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Contact • Sunny’s Resume SaaS</title>
+  <link rel="icon" href="/favicon.png" type="image/png">
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#0b1220;color:#e5e7eb}
+    .wrap{max-width:820px;margin:36px auto;padding:18px}
+    .card{background:#111a2e;border:1px solid #223055;border-radius:14px;padding:20px}
+    h1{margin:0 0 8px}
+    label{display:block;margin-top:12px;color:#9aa6c0;font-size:13px}
+    input,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #2b3c69;background:#071025;color:#e5e7eb;outline:none}
+    textarea{min-height:120px}
+    .actions{margin-top:14px;display:flex;gap:10px}
+    button{padding:10px 14px;border-radius:10px;border:0;cursor:pointer;font-weight:700}
+    .primary{background:#6366f1;color:white}
+    .ghost{background:transparent;border:1px solid #2b3c69;color:#e5e7eb}
+    .note{margin-top:12px;color:#94a3b8}
+    .footer-nav{display:flex;gap:12px;justify-content:center;margin-top:18px}
+    .footer-nav a{color:#9aa6c0;text-decoration:none;font-weight:700}
+    .success{color:#34d399;margin-top:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Contact</h1>
+      <p class="note">Have feedback or need help? Send a message and I'll get back to you — messages are delivered privately.</p>
+
+      <form id="contactForm" autocomplete="off">
+        <!-- Honeypot field for basic spam protection (should remain empty) -->
+        <input type="text" name="hp" id="hp" style="position:absolute;left:-9999px;top:auto;opacity:0" tabindex="-1" aria-hidden="true">
+        <label for="cname">Name (required)</label>
+        <input id="cname" name="name" required />
+
+        <label for="cemail">Your email (required)</label>
+        <input id="cemail" name="email" type="email" placeholder="you@example.com" required />
+
+        <label for="cphone">Phone (10 digits required)</label>
+        <input id="cphone" name="phone" placeholder="e.g. 9876543210" maxlength="10" />
+
+        <label for="cmsg">Message</label>
+        <textarea id="cmsg" name="message" placeholder="How can I help?" required></textarea>
+
+        <div class="actions">
+          <button type="submit" class="primary">Send</button>
+          <button type="button" id="btnClear" class="ghost">Clear</button>
+        </div>
+
+        <div id="cstatus" class="note"></div>
+        <div id="cok" class="success" style="display:none">Message prepared — opening email client.</div>
+      
+      </form>
+
+      <!-- Success modal -->
+      <div id="successModal" style="display:none;position:fixed;inset:0;align-items:center;justify-content:center;background:rgba(2,6,23,0.6)">
+        <div style="background:#071025;padding:20px;border-radius:12px;max-width:480px;margin:0 auto;border:1px solid #223055;color:#e6eef8">
+          <h2 style="margin-top:0">Message sent</h2>
+          <p style="color:#9ab0d6">Thanks — your message was delivered. I'll reply by email shortly.</p>
+          <div style="text-align:right;margin-top:12px"><button id="modalClose" class="primary">Close</button></div>
+        </div>
+      </div>
+      </form>
+
+      <div class="footer-nav">
+        <a href="./index.html">Home</a>
+        <a href="./contact.html">Contact</a>
+        <a href="./register.html">Register</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  const form = document.getElementById('contactForm');
+  const status = document.getElementById('cstatus');
+  const cok = document.getElementById('cok');
+  const hp = document.getElementById('hp');
+  const successModal = document.getElementById('successModal');
+  const modalClose = document.getElementById('modalClose');
+
+    function setStatus(msg, err) { 
+      status.textContent = msg; 
+      status.style.color = err ? '#fb7185' : '#94a3b8'; 
+    }
+
+    function fallbackToMailto(name, email, phone, message) {
+      try {
+        const to = 'sk4936469@gmail.com';
+        const subject = encodeURIComponent('Contact from ' + name);
+        const bodyParts = [`Name: ${name}`, `Email: ${email}`];
+        if (phone) bodyParts.push(`Phone: ${phone}`);
+        bodyParts.push(`\nMessage:\n${message}`);
+        const body = encodeURIComponent(bodyParts.join('\n'));
+        cok.style.display = 'block';
+        setTimeout(() => { window.location.href = `mailto:${to}?subject=${subject}&body=${body}`; }, 250);
+      } catch(e) {
+        setStatus('Unable to send message. Please try again later.', true);
+      }
+    }
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      
+      const name = document.getElementById('cname').value.trim();
+      const email = document.getElementById('cemail').value.trim();
+      const phone = document.getElementById('cphone').value.trim();
+      const message = document.getElementById('cmsg').value.trim();
+
+      // 1. Basic Field Validation
+      if (!name || !email || !message) { 
+        setStatus('Please fill name, email and message.', true); 
+        return; 
+      }
+
+      // 2. Email Validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        setStatus('Please enter a valid email address.', true);
+        return;
+      }
+
+      // 3. Phone Validation (Only numbers, exactly 10 digits)
+      const phoneRegex = /^[0-9]{10}$/;
+      if (phone && !phoneRegex.test(phone)) {
+        setStatus('Phone must be exactly 10 digits (numbers only).', true);
+        return;
+      }
+
+  // Try Web3Forms first, then fall back to Formspree, then mailto.
+  const WEB3_ENDPOINT = 'https://api.web3forms.com/submit';
+  const WEB3_ACCESS_KEY = 'e71e91b4-d439-4afa-8a75-3121dbede603'; // replace with your web3forms access key if different
+  const FORM_ENDPOINT = 'https://formspree.io/f/e71e91b4-d439-4afa-8a75-3121dbede603';
+      cok.style.display = 'none';
+      setStatus('Sending...', false);
+
+      // Check honeypot - if filled, silently drop to reduce spam
+      if (hp && hp.value.trim() !== '') {
+        setStatus('Submission blocked.', true);
+        return;
+      }
+
+      (async () => {
+        // Try Web3Forms first (requires access_key). If it responds with 404 or error, try Formspree, then mailto.
+        const payload = { name, email, phone, message };
+
+        // Helper to POST JSON and return {ok, status, text}
+        async function postJson(url, body, headers = {}) {
+          try {
+            const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+            const text = await res.text();
+            return { ok: res.ok, status: res.status, text };
+          } catch (e) {
+            return { ok: false, status: 0, text: String(e) };
+          }
+        }
+
+        // 1) Web3Forms
+        const web3Body = { access_key: WEB3_ACCESS_KEY, ...payload };
+        const web3Res = await postJson(WEB3_ENDPOINT, web3Body);
+        if (web3Res.ok) {
+          successModal.style.display = 'flex';
+          form.reset();
+          setStatus('');
+          return;
+        }
+
+        // If Web3Forms specifically returned 404 or an error body mentioning "FORM_NOT_FOUND" or similar, try Formspree next.
+        if (web3Res.status === 404 || /form not found|FORM_NOT_FOUND/i.test(web3Res.text || '')) {
+          // try Formspree next
+          const spRes = await postJson(FORM_ENDPOINT, payload);
+          if (spRes.ok) {
+            successModal.style.display = 'flex';
+            form.reset();
+            setStatus('');
+            return;
+          }
+        }
+
+        // final fallback to mailto
+        setStatus('Send failed. Opening email client...', true);
+        fallbackToMailto(name, email, phone, message);
+      })();
+    });
+
+    document.getElementById('btnClear').addEventListener('click', () => {
+      form.reset();
+      status.textContent = '';
+      cok.style.display = 'none';
+    });
+
+    modalClose.addEventListener('click', () => {
+      successModal.style.display = 'none';
+    });
+  </script>
+</body>
+</html>

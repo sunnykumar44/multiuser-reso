@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Unlock • Sunny’s Resume SaaS</title>
+  <link rel="icon" href="/favicon.png" type="image/png">
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #111a2e;
+      --border: #223055;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --primary: #6366f1;
+      --err: #fb7185;
+      --ok: #34d399;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: radial-gradient(circle at top, #111827, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .top a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 26px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.5);
+    }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    p { margin: 0 0 18px; color: var(--muted); }
+    label { display:block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; }
+    input {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid #2b3c69;
+      background: #0b1220;
+      color: var(--text);
+      outline: none;
+      font-size: 15px;
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .actions { display:flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+    button {
+      border: 0;
+      border-radius: 14px;
+      padding: 12px 16px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .primary { background: var(--primary); color: white; }
+    .ghost { background: transparent; border: 1px solid #2b3c69; color: var(--text); }
+    .note { margin-top: 12px; font-size: 13px; color: var(--muted); }
+    .note.ok { color: var(--ok); }
+    .note.err { color: var(--err); }
+    code { background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 8px; }
+  /* subtle magnetic effect for buttons */
+  .magnetic { transition: transform .12s cubic-bezier(.22,.9,.3,1), box-shadow .12s ease; will-change: transform; }
+  .magnetic:hover { transform: translateY(-4px) scale(1.01); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  .magnetic:active { transform: translateY(-2px) scale(.998); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="top">
+      <a href="./index.html">← Back to Lobby</a>
+      <span style="color:var(--muted); font-size:13px;">PIN never leaves your browser</span>
+    </div>
+
+    <div class="card">
+      <h1>Unlock Profile</h1>
+      <p>
+        Enter your 6-digit PIN to decrypt your profile locally.
+      </p>
+
+      <div class="row">
+        <div>
+          <label>Nickname</label>
+          <input id="nickname" disabled />
+        </div>
+        <div>
+          <label>6-digit PIN</label>
+          <input id="pin" inputmode="numeric" maxlength="6" placeholder="123456" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="btnUnlock">Unlock</button>
+        <button class="ghost" id="btnDebug">Debug: Show Stored Keys</button>
+      </div>
+
+      <div class="note" id="status"></div>
+
+      <div class="note" style="margin-top:16px;">
+        Looks for: <code>user:&lt;nickname&gt;:blob</code> in localStorage
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { decryptJSON } from "./js/crypto-core.js";
+
+    const $ = (id) => document.getElementById(id);
+    const status = $("status");
+
+    function setStatus(msg, kind = "") {
+      status.className = "note" + (kind ? " " + kind : "");
+      status.textContent = msg;
+    }
+
+    function normalizeNickname(s) {
+      return String(s || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9-_]/g, "");
+    }
+
+    function getKey(nickname) {
+      return `user:${nickname}:blob`;
+    }
+
+    // Read nickname from query param: unlock.html?u=ok
+    const params = new URLSearchParams(location.search);
+    const u = normalizeNickname(params.get("u"));
+    // Capture the 'next' action (resume, edit, delete)
+    const next = (params.get("next") || "resume").toLowerCase();
+
+    $("nickname").value = u || "";
+
+    if (!u) {
+      setStatus("No user selected. Go back to Lobby and click a user.", "err");
+    } else {
+      const actionText = next === "delete" ? "DELETE" : (next === "edit" ? "EDIT" : "UNLOCK");
+      setStatus(`Ready to ${actionText}: ${u}`, "ok");
+    }
+
+    $("btnUnlock").addEventListener("click", async () => {
+      try {
+        const nickname = normalizeNickname($("nickname").value);
+        const pin = $("pin").value.trim();
+
+        if (!nickname) throw new Error("Missing nickname");
+        if (!/^\d{6}$/.test(pin)) throw new Error("PIN must be exactly 6 digits");
+
+        const raw = localStorage.getItem(getKey(nickname));
+        if (!raw) throw new Error(`No local profile found for "${nickname}"`);
+
+        const blob = JSON.parse(raw);
+
+        // Decrypt locally
+        const profile = await decryptJSON({ pin, blob });
+
+  // unlocked profile available for debugging
+
+        // Store decrypted profile only in sessionStorage (temporary, tab-only)
+        sessionStorage.setItem("unlockedProfile", JSON.stringify(profile));
+        sessionStorage.setItem("unlockedNickname", nickname);
+
+        // --- SUCCESS & ROUTING LOGIC ---
+        setStatus("Unlocked! (stored in sessionStorage).", "ok");
+
+        // Perform action requested from lobby menu
+        if (next === "delete") {
+          // Delete encrypted blob locally (privacy-safe)
+          if(confirm("Are you sure you want to permanently delete this profile from this browser?")) {
+            localStorage.removeItem(getKey(nickname));
+            sessionStorage.removeItem("unlockedProfile");
+            sessionStorage.removeItem("unlockedNickname");
+            setStatus(`Deleted profile "${nickname}" locally. Redirecting...`, "ok");
+            setTimeout(() => window.location.href = "./index.html", 1000);
+          } else {
+             setStatus("Delete cancelled.", "ok");
+          }
+        } else if (next === "edit") {
+          window.location.href = "./register.html?edit=1";
+        } else {
+          // default: resume
+          window.location.href = "./resume.html";
+        }
+
+      } catch (err) {
+        console.error(err);
+        setStatus(err?.message || "Unlock failed", "err");
+      }
+    });
+
+    $("btnDebug").addEventListener("click", () => {
+      const keys = Object.keys(localStorage);
+  // localStorage keys enumerated
+      setStatus(`Found ${keys.length} keys in localStorage. Check console.`, "ok");
+    });
+  </script>
+  <script>
+    try { document.querySelectorAll('button').forEach(b => b.classList.add('magnetic')); } catch(e){}
+  </script>
+</body>
+</html>
+
+
+
+
+//python3 -m http.server 3000

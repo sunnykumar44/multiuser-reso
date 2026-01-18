@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Register • Sunny’s Multi-User Resume SaaS</title>
+  <link rel="icon" href="/favicon.png" type="image/png">
+  <style>
+    /* ===== Entries Section UI (register) ===== */
+    .cs-box{
+      border:1px solid #2b3c69;
+      border-radius:12px;
+      padding:10px;
+      margin-bottom:10px;
+      background: rgba(255,255,255,.02);
+    }
+    .cs-row{
+      display:grid;
+      grid-template-columns: 1fr 170px;
+      gap:10px;
+      align-items:center;
+    }
+    .cs-title{ font-weight:800; background:#162035; }
+    .cs-placement{ padding:10px 12px; border-radius:12px; border:1px solid #2b3c69; background:#0b1220; color:#e5e7eb; }
+    .cs-entries{ margin-top:10px; display:grid; gap:10px; }
+    .cs-entry{
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      padding:10px;
+      background: rgba(0,0,0,.15);
+    }
+    .cs-entry-key{ font-weight:800; }
+    .cs-entry-bullets{ min-height:90px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; }
+    .cs-add-entry, .cs-remove, .cs-entry-remove{
+      margin-top:8px;
+      font-size:12px;
+      padding:8px 10px;
+    }
+
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #0b1220; color: #e5e7eb; }
+    .wrap { max-width: 820px; margin: 40px auto; padding: 0 16px; }
+    .card { background: #111a2e; border: 1px solid #223055; border-radius: 16px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    p { margin: 0 0 16px; color: #cbd5e1; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { font-size: 12px; color: #cbd5e1; display: block; margin-bottom: 6px; }
+    input, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid #2b3c69;
+      background: #0b1220;
+      color: #e5e7eb;
+      outline: none;
+    }
+    textarea { min-height: 110px; resize: vertical; }
+    .row { margin-top: 12px; }
+    .actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    button {
+      padding: 10px 14px;
+      border: 0;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .primary { background: #4f46e5; color: white; }
+    .ghost { background: transparent; border: 1px solid #2b3c69; color: #e5e7eb; }
+  /* subtle magnetic button effect (consistent across pages) */
+  .magnetic { transition: transform .12s cubic-bezier(.22,.9,.3,1), box-shadow .12s ease; will-change: transform; }
+  .magnetic:hover { transform: translateY(-4px) scale(1.01); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  .magnetic:active { transform: translateY(-2px) scale(.998); }
+    .note { font-size: 12px; color: #94a3b8; margin-top: 10px; }
+    .ok { color: #34d399; }
+    .err { color: #fb7185; }
+    .full { grid-column: 1 / -1; }
+    code { background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 8px; }
+    
+    /* Specific styles for custom section items */
+    .section-title { font-weight: bold; background: #162035; }
+    .section-items { min-height: 80px; font-family: monospace; font-size: 13px; }
+
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Phase 1 — Local Encryption Test</h1>
+      <p>
+        This page encrypts your profile in the browser using <code>AES-GCM</code> + <code>PBKDF2</code>.
+        The server never needs to see your PIN or decrypted data.
+      </p>
+
+      <form id="registerForm" autocomplete="off">
+        <div class="grid">
+          <div>
+            <label for="nickname">Nickname (unique user key)</label>
+            <input id="nickname" name="nickname" placeholder="e.g. sunny" required />
+          </div>
+
+          <div>
+            <label for="pin">6-digit PIN</label>
+            <input id="pin" name="pin" inputmode="numeric" maxlength="6" placeholder="123456" required />
+          </div>
+
+          <div>
+            <label for="fullName">Full Name</label>
+            <input id="fullName" name="fullName" placeholder="Sunny Kumar" />
+          </div>
+
+          <div>
+            <label for="college">College</label>
+            <input id="college" name="college" placeholder="Your college name" />
+          </div>
+
+          <div class="full">
+            <label for="summary">Professional Summary (optional)</label>
+            <textarea id="summary" name="summary" placeholder="2–4 lines summary..."></textarea>
+          </div>
+
+          <div class="full">
+            <label for="skills">Skills (optional, one per line)</label>
+            <textarea id="skills" name="skills" placeholder="JavaScript&#10;React&#10;Node.js"></textarea>
+          </div>
+          <div>
+            <label for="email">Email (optional)</label>
+            <input id="email" type="email" placeholder="you@email.com" />
+          </div>
+          <div>
+            <label for="linkedin">LinkedIn (optional)</label>
+            <input id="linkedin" placeholder="https://linkedin.com/in/username" />
+          </div>
+          <div>
+            <label for="github">GitHub (optional)</label>
+            <input id="github" placeholder="https://github.com/username" />
+          </div>
+          
+          <div class="full">
+            <label for="phone">Phone (optional, but will be encrypted)</label>
+            <input id="phone" name="phone" inputmode="tel" placeholder="+91 9XXXXXXXXX" />
+          </div>
+
+          
+
+          <div class="full">
+            <label>Custom Sections (optional)</label>
+            <div id="customSections"></div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
+              <button type="button" class="ghost" id="btnAddWork">+ Add Work Experience</button>
+              <button type="button" class="ghost" id="btnAddProjects">+ Add Projects</button>
+              <button type="button" class="ghost" id="btnAddSection">+ Add Custom Section</button>
+            </div>
+            <div class="note" style="margin-top:8px;">
+              Work Experience / Projects = <b>Entries</b> (heading + bullet points). Certifications/Achievements/Traits = <b>Bullets</b>.
+            </div>
+            </div>
+            
+            <div style="margin-top:12px;">
+              <label>Existing nicknames</label>
+              <div id="existing-nicknames" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+              <div class="note" style="margin-top:8px;">Click a nickname to prefill (then click &quot;Encrypt & Save&quot; to edit).</div>
+            </div>
+        </div>
+
+        <div class="actions">
+          <button class="primary" type="submit" id="btnSave">Encrypt & Save Locally</button>
+          
+          <button class="ghost" type="button" id="btnTestDecrypt">Test Decrypt (Console)</button>
+          <button class="ghost" type="button" id="btnClear">Clear Local</button>
+          <button class="ghost" type="button" id="btnBack">Back</button>
+        </div>
+
+        <div class="note" id="status"></div>
+        <div class="note">
+          Stored in localStorage under:
+          <code>user:&lt;nickname&gt;:blob</code>
+        </div>
+      </form>
+    </div>
+  </div>
+
+<script type="module" src="./js/register/register-main.js"></script>
+<script>
+  // Attach magnetic class to buttons on this page
+  try { document.querySelectorAll('button').forEach(b => b.classList.add('magnetic')); } catch(e){}
+</script>
+<div style="text-align:center;padding:12px;color:#94a3b8;font-size:13px;">
+  <a href="./index.html" style="color:#94a3b8;margin-right:12px">Home</a>
+  <a href="./contact.html" style="color:#94a3b8;margin-right:12px">Contact</a>
+  <a href="./register.html" style="color:#94a3b8">Register</a>
+</div>
+</body>
+</html>

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sunny’s Resume SaaS</title>
+  <!-- Inline SVG favicon to avoid /favicon.ico 404 in dev -->
+  <link rel="icon" href="/favicon.png" type="image/png">
+
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #111a2e;
+      --border: #223055;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --primary: #6366f1;
+      --primary-glow: rgba(99,102,241,.5);
+      --danger: #fb7185;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: radial-gradient(circle at top, #111827, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 60px;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    header h1 {
+      font-size: 20px;
+      margin: 0;
+      letter-spacing: .3px;
+    }
+
+    header span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 30px;
+    }
+
+    .hero-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 40px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.5);
+    }
+
+    .hero-card h2 {
+      font-size: 34px;
+      line-height: 1.2;
+      margin: 0 0 16px;
+    }
+
+    .hero-card p {
+      color: var(--muted);
+      font-size: 16px;
+      margin-bottom: 32px;
+    }
+
+    /* Magnetic button */
+    .cta-wrap {
+      display: inline-block;
+      perspective: 800px;
+    }
+
+    .cta {
+      position: relative;
+      background: var(--primary);
+      color: white;
+      padding: 16px 28px;
+      border-radius: 16px;
+      border: none;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform .15s ease, box-shadow .15s ease;
+      box-shadow:
+        0 0 0 var(--primary-glow),
+        0 10px 30px rgba(0,0,0,.4);
+    }
+
+    .cta:hover {
+      box-shadow:
+        0 0 40px var(--primary-glow),
+        0 20px 60px rgba(0,0,0,.6);
+    }
+
+    .side-card {
+      background: linear-gradient(180deg, #0f172a, #020617);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 22px;
+    }
+
+    .side-title {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .side-card h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    /* User list */
+    .users {
+      list-style: none;
+      padding: 0;
+      margin: 12px 0 0;
+      display: grid;
+      gap: 10px;
+      position: relative;
+    }
+
+    .user-card {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap: 10px;
+      padding: 12px 12px;
+      border-radius: 14px;
+      background: rgba(255,255,255,.03);
+      border: 1px solid rgba(255,255,255,.06);
+      transition: background .2s ease, transform .1s ease, border .2s ease;
+      position: relative;
+      cursor: pointer;
+    }
+
+    .user-card:hover {
+      background: rgba(99,102,241,.12);
+      border-color: rgba(99,102,241,.35);
+      transform: translateY(-1px);
+    }
+
+    .user-left {
+      display:flex;
+      flex-direction:column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .user-name {
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: .2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 240px;
+    }
+
+    .user-meta {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* 3-dot menu button */
+    .dots {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(255,255,255,.03);
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 900;
+      font-size: 18px;
+      line-height: 0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
+
+    /* FIX 1: Portal Menu Styles */
+    .menu {
+      position: fixed;           /* portal */
+      background: #0b1220;
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 14px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.55);
+      width: 170px;
+      overflow: hidden;
+      display:none;
+      z-index: 99999;
+    }
+
+    .menu button {
+      width: 100%;
+      padding: 12px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      text-align: left;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .menu button:hover {
+      background: rgba(99,102,241,.14);
+    }
+
+    .menu .danger {
+      color: var(--danger);
+    }
+
+    .menu .danger:hover {
+      background: rgba(251,113,133,.12);
+    }
+
+  /* subtle magnetic button effect applied site-wide on index */
+  .magnetic { transition: transform .12s cubic-bezier(.22,.9,.3,1), box-shadow .12s ease; will-change: transform; }
+  .magnetic:hover { transform: translateY(-4px) scale(1.01); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  .magnetic:active { transform: translateY(-2px) scale(.998); }
+
+    footer {
+      margin-top: 80px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; }
+      .hero-card { padding: 28px; }
+      .user-name { max-width: 200px; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+
+    <header>
+      <h1>Sunny’s Resume SaaS</h1>
+      <span>Encrypted • Zero-cost • Serverless</span>
+    </header>
+
+    <section class="hero">
+      <div class="hero-card">
+        <h2>
+          Permanent Profile.<br/>
+          <span style="color:#a5b4fc">Tailored Resume.</span>
+        </h2>
+        <p>
+          Create your profile once. Let AI tailor your resume for every job — without rewriting anything.
+        </p>
+
+        <div class="cta-wrap">
+          <button class="cta" id="createBtn">
+            Create your resume →
+          </button>
+        </div>
+      </div>
+
+      <div class="side-card">
+        <div class="side-title">
+          <h3>Recent users</h3>
+          <div class="hint" id="countHint">Loading…</div>
+        </div>
+
+        <ul class="users" id="userList"></ul>
+
+        <div class="hint" style="margin-top:12px;">
+          Tip: Delete/Edit requires PIN via Unlock wall.
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      Your data is encrypted in your browser. The server never sees your PIN or profile.
+      <div style="margin-top:8px;">
+        <a href="./index.html" style="color:var(--muted); margin-right:12px;">Home</a>
+        <a href="./contact.html" style="color:var(--muted); margin-right:12px;">Contact</a>
+        <a href="./register.html" style="color:var(--muted);">Register</a>
+      </div>
+    </footer>
+
+  </div>
+
+<script type="module" src="./js/lobby/lobby-main.js"></script>
+
+<script>
+  try { document.querySelectorAll('button').forEach(b => b.classList.add('magnetic')); } catch(e){}
+</script>
+
+</body>
+</html>
