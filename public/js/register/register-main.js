@@ -284,15 +284,16 @@ form.addEventListener("submit", async (e) => {
 
     // Keep session in sync so resume page can immediately reflect changes
     try {
+      const effectiveNickname = nickname || profile.fullName || 'anon';
       sessionStorage.setItem("unlockedProfile", JSON.stringify(profile));
-      sessionStorage.setItem("unlockedNickname", nickname);
+      sessionStorage.setItem("unlockedNickname", effectiveNickname);
     } catch (e) {
       console.warn('could not set unlocked profile in sessionStorage', e);
     }
 
     // Remove any stale resume draft for this user so resume renders the updated profile
     try {
-      const draftKey = `resumeDraft:${nickname}`;
+      const draftKey = `resumeDraft:${nickname || profile.fullName || 'anon'}`;
       sessionStorage.removeItem(draftKey);
     } catch (e) {
       console.warn('Could not remove resume draft key', e);

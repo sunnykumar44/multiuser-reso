@@ -637,20 +637,21 @@ async function callGenerateAPI(payload) {
       const scope = typeof getScopeFromUI === 'function' ? getScopeFromUI() : [];
       const profile = rawProfile ? safeParseJSON(rawProfile, null) : null;
 
-      setStatus('Generating (server)...');
-      showToast('Generating...', 'success', 2000);
-      const payload = { profile, jd, mode, template, scope, nickname };
-      const result = await callGenerateAPI(payload);
+      // determine effective nickname (prefer unlockedNickname, then profile, then anon)
+      const effectiveNickname = sessionStorage.getItem('unlockedNickname') || (profile && (profile.nickname || profile.fullName)) || 'anon';
 
+      setStatus('Generating via server...');
+      const result = await callGenerateAPI({ profile, jd, mode, template, scope, nickname: effectiveNickname });
       if (result && result.generated && result.generated.html) {
         // Persist returned HTML into draft and render
         draft.htmlOverride = result.generated.html;
         saveDraft(draft);
         // Ensure immediate visible update even if module scope prevents calling renderWithDraft elsewhere
         try { if (typeof renderWithDraft === 'function') { renderWithDraft(); } else if (paperEl) { paperEl.innerHTML = result.generated.html; } } catch(e){ if (paperEl) paperEl.innerHTML = result.generated.html; }
-        // Ensure sessionStorage key exists for anonymous users
+        // Persist using the effective nickname key so drafts are tied to the right user
         try {
-          sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+          const draftKey = `resumeDraft:${effectiveNickname}`;
+          sessionStorage.setItem(draftKey, JSON.stringify(draft));
         } catch (e) { /* ignore storage errors */ }
         updateEditBadge();
         setStatus('Generated (server)');
@@ -661,7 +662,7 @@ async function callGenerateAPI(payload) {
           try {
             History.addHistoryItem({
               id: result.id || Date.now(),
-              nickname: nickname || 'anon',
+              nickname: effectiveNickname,
               date: new Date().toISOString(),
               jdPreview: jd.slice(0, 140),
               mode,
