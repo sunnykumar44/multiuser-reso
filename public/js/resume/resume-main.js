@@ -110,28 +110,10 @@ function getDraftKey() {
   return `resumeDraft:${getEffectiveNickname()}`;
 }
 
-// Override loadDraft/saveDraft to use dynamic draft key
-function loadDraft() {
-  try {
-    const key = getDraftKey();
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return defaultDraft();
-    return safeParseJSON(raw, defaultDraft());
-  } catch (e) {
-    console.warn('loadDraft error', e);
-    return defaultDraft();
-  }
-}
+// loadDraft/saveDraft are implemented further down in the Draft model section
+// (removed duplicate simple wrappers here to avoid redeclaration errors)
 
-function saveDraft(draftObj) {
-  try {
-    const key = getDraftKey();
-    sessionStorage.setItem(key, JSON.stringify(draftObj));
-  } catch (e) {
-    console.warn('saveDraft error', e);
-  }
-}
-
+// ...existing code...
 function nowISO() {
   return new Date().toISOString();
 }
