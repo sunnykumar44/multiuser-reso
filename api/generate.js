@@ -96,11 +96,85 @@ module.exports = async (req, res) => {
     }
   }
 
-  // Fallback to stub if no AI result
+  // Fallback to structured HTML built from profile + scope when no AI result
   if (!generatedHtml) {
     const displayName = (profile && profile.fullName) || nickname || 'User';
-    generatedHtml = `<div class="generated-resume"><h2>Generated resume for ${escapeHtml(displayName)}</h2><p>Mode: ${escapeHtml(mode || 'ats')}, Template: ${escapeHtml(template || 'classic')}</p><pre>${escapeHtml(jd.slice(0, 400))}</pre></div>`;
-    generatedText = `Generated resume (stub) for ${displayName}`;
+    const jdSnippet = escapeHtml((jd || '').slice(0, 400));
+
+    const sectionsToRender = (safeScope && safeScope.length) ? safeScope : ['Summary', 'Skills', 'Experience'];
+
+    const pieces = [];
+    pieces.push(`<div class="generated-resume"><h2>Generated resume for ${escapeHtml(displayName)}</h2><p>Mode: ${escapeHtml(mode || 'ats')}, Template: ${escapeHtml(template || 'classic')}</p>`);
+
+    for (const sec of sectionsToRender) {
+      const s = String(sec || '').trim();
+      const key = s.toLowerCase();
+
+      if (key === 'summary') {
+        const txt = (profile && profile.summary) ? escapeHtml(profile.summary) : '';
+        if (txt) pieces.push(`<section class="sec-summary"><h3>Summary</h3><p>${txt}</p></section>`);
+      } else if (key === 'skills' || key === 'technical skills') {
+        const skills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(/\r?\n/) : []);
+        if (skills && skills.length) {
+          pieces.push('<section class="sec-skills"><h3>Skills</h3><ul>');
+          for (const sk of skills) pieces.push(`<li>${escapeHtml(String(sk))}</li>`);
+          pieces.push('</ul></section>');
+        }
+      } else if (key === 'experience' || key.includes('work') || key.includes('project') || key === 'work experience') {
+        // find entries-type custom sections
+        const secs = Array.isArray(profile.customSections) ? profile.customSections.filter(s => s && (String(s.type||'')==='entries' || (String(s.title||'').toLowerCase().includes('work') || String(s.title||'').toLowerCase().includes('project')))) : [];
+        if (secs.length) {
+          for (const sg of secs) {
+            const title = escapeHtml(sg.title || 'Experience');
+            pieces.push(`<section class="sec-${slugify(title)}"><h3>${title}</h3>`);
+            for (const it of (sg.items || [])) {
+              const heading = escapeHtml(it.key || '');
+              pieces.push(`<div class="entry"><strong>${heading}</strong>`);
+              if (Array.isArray(it.bullets) && it.bullets.length) {
+                pieces.push('<ul>');
+                for (const b of it.bullets) pieces.push(`<li>${escapeHtml(b)}</li>`);
+                pieces.push('</ul>');
+              }
+              pieces.push('</div>');
+            }
+            pieces.push('</section>');
+          }
+        }
+      } else if (key === 'certifications' || key === 'achievements' || key === 'character traits') {
+        // try to find matching custom section by title
+        const match = (Array.isArray(profile.customSections) ? profile.customSections : []).find(sc => String(sc.title||'').trim().toLowerCase().includes(key.split(' ')[0]));
+        if (match && Array.isArray(match.items) && match.items.length) {
+          pieces.push(`<section class="sec-${slugify(match.title)}"><h3>${escapeHtml(match.title)}</h3><ul>`);
+          for (const it of match.items) pieces.push(`<li>${escapeHtml(String(it || ''))}</li>`);
+          pieces.push('</ul></section>');
+        }
+      } else {
+        // generic: try to find by title in customSections
+        const match = (Array.isArray(profile.customSections) ? profile.customSections : []).find(sc => String(sc.title||'').trim().toLowerCase() === key);
+        if (match) {
+          pieces.push(`<section class="sec-${slugify(match.title)}"><h3>${escapeHtml(match.title)}</h3>`);
+          if (match.type === 'entries') {
+            for (const it of (match.items || [])) {
+              pieces.push(`<div class="entry"><strong>${escapeHtml(it.key||'')}</strong>`);
+              if (Array.isArray(it.bullets) && it.bullets.length) { pieces.push('<ul>'); for (const b of it.bullets) pieces.push(`<li>${escapeHtml(b)}</li>`); pieces.push('</ul>'); }
+              pieces.push('</div>');
+            }
+          } else {
+            pieces.push('<ul>'); for (const it of (match.items || [])) pieces.push(`<li>${escapeHtml(String(it||''))}</li>`); pieces.push('</ul>');
+          }
+          pieces.push('</section>');
+        }
+      }
+    }
+
+    // include JD snippet / role
+    if (jdSnippet) {
+      pieces.push(`<section class="sec-role"><h3>Target role</h3><pre>${jdSnippet}</pre></section>`);
+    }
+
+    pieces.push('</div>');
+    generatedHtml = pieces.join('\n');
+    generatedText = `Generated resume (fallback) for ${displayName}`;
   }
 
   const record = {
