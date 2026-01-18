@@ -28,4 +28,8 @@ async function saveHistory(record) {
   await db.collection("resume_history").doc(id).set(record, { merge: true });
 }
 
-module.exports = { saveHistory };
+function initDb() {
+  return initAdmin();
+}
+
+module.exports = { saveHistory, initDb };
