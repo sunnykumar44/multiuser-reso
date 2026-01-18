@@ -604,6 +604,85 @@ if (btnGen) {
   });
 }
 
+// Server generate integration: POST to /api/generate and return parsed JSON
+async function callGenerateAPI(payload) {
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error('Generate API error: ' + res.status + ' ' + txt);
+    }
+    return await res.json();
+  } catch (err) {
+    console.error('callGenerateAPI error:', err);
+    throw err;
+  }
+}
+
+// Wire the existing Generate button to call the server and render returned HTML
+(function wireGenerateButton() {
+  const btn = $('btnGen');
+  if (!btn) return;
+
+  btn.addEventListener('click', async (e) => {
+    try {
+      e.preventDefault();
+      const jd = $('jd')?.value || '';
+      const mode = getActive('modes', 'data-mode') || 'ats';
+      const template = getActive('templates', 'data-template') || 'classic';
+      const scope = typeof getScopeFromUI === 'function' ? getScopeFromUI() : [];
+      const profile = rawProfile ? safeParseJSON(rawProfile, null) : null;
+
+      setStatus('Generating (server)...');
+      showToast('Generating...', 'success', 2000);
+      const payload = { profile, jd, mode, template, scope, nickname };
+      const result = await callGenerateAPI(payload);
+
+      if (result && result.generated && result.generated.html) {
+        // Persist returned HTML into draft and render
+        draft.htmlOverride = result.generated.html;
+        saveDraft(draft);
+        // Ensure immediate visible update even if module scope prevents calling renderWithDraft elsewhere
+        try { if (typeof renderWithDraft === 'function') { renderWithDraft(); } else if (paperEl) { paperEl.innerHTML = result.generated.html; } } catch(e){ if (paperEl) paperEl.innerHTML = result.generated.html; }
+        // Ensure sessionStorage key exists for anonymous users
+        try {
+          sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+        } catch (e) { /* ignore storage errors */ }
+        updateEditBadge();
+        setStatus('Generated (server)');
+        showToast('Generated', 'success', 1600);
+
+        // Optionally add to local history UI if History helper present
+        if (typeof History !== 'undefined' && History.addHistoryItem) {
+          try {
+            History.addHistoryItem({
+              id: result.id || Date.now(),
+              nickname: nickname || 'anon',
+              date: new Date().toISOString(),
+              jdPreview: jd.slice(0, 140),
+              mode,
+              template,
+              htmlSnapshot: result.generated.html,
+            });
+            if (History.render) History.render();
+          } catch (hErr) { console.warn('history add failed', hErr); }
+        }
+      } else {
+        setStatus('No generated result', 'err');
+        showToast('No result from server', 'err');
+      }
+    } catch (err) {
+      console.error('Generate click error:', err);
+      setStatus('Generation failed', 'err');
+      showToast('Generation failed', 'err');
+    }
+  });
+})();
+
 // --------------------
 // Reset edits (remove htmlOverride, keep draft)
 // --------------------
