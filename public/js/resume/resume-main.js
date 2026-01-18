@@ -110,10 +110,12 @@ function getDraftKey() {
   return `resumeDraft:${getEffectiveNickname()}`;
 }
 
-// loadDraft/saveDraft are implemented further down in the Draft model section
-// (removed duplicate simple wrappers here to avoid redeclaration errors)
+// loadDraft/saveDraft are implemented in the Draft model section below.
+// (Removed earlier duplicate implementations to avoid redeclaration errors.)
 
-// ...existing code...
+// --------------------
+// Debug helpers
+// --------------------
 function nowISO() {
   return new Date().toISOString();
 }
