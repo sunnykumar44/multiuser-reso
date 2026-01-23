@@ -138,6 +138,33 @@ function buildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic'
   return { html: pieces.join('\n'), text: `Generated resume (fallback) for ${displayName}` };
 }
 
+// Optional Upstash rate-limit setup (safe if packages/env not present)
+let rateLimiter = null;
+let upstashEnabled = false;
+try {
+  const { Ratelimit } = require('@upstash/ratelimit');
+  const { Redis } = require('@upstash/redis');
+  if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+    const redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
+    rateLimiter = new Ratelimit({ redis, limiter: Ratelimit.fixedWindow(20, '1 d'), analytics: true, prefix: '@upstash:resume' });
+    upstashEnabled = true;
+  }
+} catch (e) {
+  // ignore if not installed
+}
+
+// Helper to wrap fragment into full DOCTYPE page if needed
+function wrapFullPage(htmlFragment, profile) {
+  const name = (profile && profile.fullName) ? escapeHtml(profile.fullName) : '';
+  const email = profile?.email ? escapeHtml(profile.email) : '';
+  const phone = profile?.phone ? escapeHtml(profile.phone) : '';
+  const headerContact = [email && `<a href="mailto:${email}">${email}</a>`, phone].filter(Boolean).join(' | ');
+  return `<!DOCTYPE html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<style>body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;padding:12px;max-width:800px;margin:0 auto}h1{font-size:20px;margin-bottom:4px}h2{font-size:14px;margin-top:12px;border-bottom:1px solid #e2e8f0;padding-bottom:6px}</style></head><body>` +
+    (name ? `<h1>${name}</h1><div style="margin-bottom:8px;color:#475569">${headerContact}</div>` : '') +
+    `<div class="resume-body">${htmlFragment}</div></body></html>`;
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -151,94 +178,76 @@ module.exports = async (req, res) => {
 
   try {
     let body = {};
-    try {
-      body = typeof req.body === "object" ? req.body : JSON.parse(req.body || "{}");
-    } catch {
-      return res.status(400).json({ error: "Invalid JSON" });
-    }
+    try { body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}'); } catch { return res.status(400).json({ error: 'Invalid JSON' }); }
 
-    const { profile, jd, mode, template, scope, nickname } = body;
-    if (!jd || typeof jd !== "string") {
-      const fallback = buildFallback(profile || {}, jd || '', mode, template, scope || [], nickname);
-      return res.status(400).json({ error: 'Missing job description (jd)', ok: false, generated: { html: fallback.html, text: fallback.text } });
-    }
+    const { profile, jd, mode, template, scope, nickname, pin } = body;
 
-    const safeProfile = profile && typeof profile === 'object' ? profile : {};
-    const safeScope = Array.isArray(scope) ? scope : [];
-    
-    // ... Prompt generation ...
-    const promptLines = [];
-    promptLines.push("You are an assistant that generates an HTML resume fragment.");
-    promptLines.push("Follow these rules exactly:");
-    promptLines.push("1) Output only valid HTML markup for the resume content — no explanations or commentary.");
-    promptLines.push("2) Wrap the entire resume in a single <div class=\"generated-resume\">...</div>.");
-    promptLines.push("3) Use semantic headings and lists where appropriate. Keep styling minimal and inline-free.");
-    promptLines.push("4) Do NOT include any top-level header like 'Generated resume for ...' or 'Mode: ...'.");
-    promptLines.push("5) Follow this exact section order where present: header (name + contacts), Summary (1–3 sentences), Technical Skills (bulleted list) / Skills, Education, Work Experience (entries with bullets), Projects (entries), Certifications, Achievements, Character Traits.");
-    promptLines.push("6) Only include sections that are present in the profile or are explicitly listed in the scope array. Do not repeat sections.");
-    promptLines.push("7) Use bullets for lists (ul/li). Use concise sentences for Summary. For experience entries use a bold heading and a ul of bullet points.");
-    promptLines.push("8) Do not include API keys, tokens, or sensitive data in the output.");
-    promptLines.push("");
-    promptLines.push(`Job description:\n${jd.trim().slice(0,4000)}`);
-    promptLines.push("");
-    promptLines.push(`Profile (JSON):\n${JSON.stringify(safeProfile).slice(0,8000)}`);
-    promptLines.push("");
-    promptLines.push(`Requested mode: ${mode || 'ats'}, template: ${template || 'classic'}`);
-    if (safeScope.length) promptLines.push(`Scope: ${safeScope.join(', ')}`);
-    promptLines.push("");
-    promptLines.push("Produce concise, well-structured HTML only.");
-
-    const fullPrompt = promptLines.join('\n');
-
-    let generatedHtml = null;
-    let generatedText = null;
-
-    if (GCP_API_KEY) {
-      try {
-        const aiText = await callGcpGenerate(fullPrompt, 1024);
-        generatedHtml = String(aiText);
-        generatedText = (generatedHtml || '').replace(/<[^>]+>/g, '').slice(0, 1000);
-      } catch (err) {
-        console.error('GCP generate failed:', err.message || err);
+    // Optional PIN check (protect API from abuse) — set APP_PIN in env
+    if (process.env.APP_PIN) {
+      if (!pin || String(pin) !== String(process.env.APP_PIN)) {
+        return res.status(401).json({ ok: false, error: 'Unauthorized: invalid PIN' });
       }
     }
 
+    // Optional rate-limit by PIN or IP
+    let quota = null;
+    if (upstashEnabled && rateLimiter) {
+      try {
+        const id = pin || req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'anon';
+        const { success, limit, remaining, reset } = await rateLimiter.limit(id);
+        quota = { success, limit, remaining, reset: new Date(reset).toISOString() };
+        if (!success) {
+          return res.status(429).json({ ok: false, error: 'Quota exceeded', quota });
+        }
+      } catch (rlErr) {
+        console.warn('Rate limit check failed', rlErr);
+      }
+    }
+
+    if (!jd || typeof jd !== 'string') {
+      const fallback = buildFallback(profile || {}, jd || '', mode, template, scope || [], nickname);
+      const html = wrapFullPage(fallback.html, profile || {});
+      return res.status(400).json({ ok: false, error: 'Missing job description (jd)', generated: { html: fallback.html, text: fallback.text, page: html }, quota });
+    }
+
+    // Strengthened prompt: require full DOCTYPE HTML page output and section order
+    const strategyNote = (mode === 'faang') ? 'Emphasize scale and measurable impact.' : (mode === 'startup' ? 'Emphasize versatility and ownership.' : 'Focus on ATS-friendly keywords and concise bullets.');
+    const fullPrompt = `CRITICAL: Output ONLY valid HTML starting with <!DOCTYPE html>. Use a single-page A4 layout.\n\nPROFILE_JSON:\n${JSON.stringify(profile || {}).slice(0,12000)}\n\nJOB_DESCRIPTION:\n${String(jd).slice(0,8000)}\n\nINSTRUCTIONS: Produce a resume with this exact order when present: header (name + contacts), Summary (1-3 sentences), Technical Skills (bulleted), Education, Work Experience (entries with bullets), Projects, Certifications, Achievements, Character Traits. Use semantic HTML (h1/h2/section/ul/li) and avoid any leading lines like 'Generated resume for' or 'Mode:'. Keep styling minimal and inline-free. Strategy: ${strategyNote}`;
+
+    // Call GCP - request full-page HTML
+    let generatedHtml = null;
+    let generatedText = null;
+    if (GCP_API_KEY) {
+      try {
+        const aiText = await callGcpGenerate(fullPrompt, 2048);
+        // try to extract starting at <!DOCTYPE html>
+        let html = String(aiText || '');
+        const idx = html.toLowerCase().indexOf('<!doctype html>');
+        if (idx >= 0) html = html.substring(idx);
+        // strip markdown fences
+        html = html.replace(/```html|```/gi, '');
+        generatedHtml = html;
+        generatedText = (generatedHtml || '').replace(/<[^>]+>/g, '').slice(0,2000);
+      } catch (gErr) {
+        console.error('GCP generate failed:', gErr?.message || gErr);
+      }
+    }
+
+    // Fallback to structured builder and wrap into full page
     if (!generatedHtml) {
       const fallback = buildFallback(profile || {}, jd || '', mode, template, scope || [], nickname);
-      generatedHtml = fallback.html;
+      const page = wrapFullPage(fallback.html, profile || {});
+      generatedHtml = page; // return full page
       generatedText = fallback.text;
     }
 
-    const record = {
-      id: Date.now(),
-      nickname: nickname || (profile && profile.nickname) || 'anon',
-      date: new Date().toISOString(),
-      jdPreview: jd.slice(0, 140),
-      mode: mode || 'ats',
-      template: template || 'classic',
-      scope: scope || null,
-      htmlSnapshot: generatedHtml,
-    };
+    // Save history if available
+    try { await saveHistory({ id: Date.now(), nickname: nickname || (profile && profile.nickname) || 'anon', date: new Date().toISOString(), jdPreview: String(jd).slice(0,140), mode, template, scope, htmlSnapshot: generatedHtml }); } catch(e){ console.warn('history save failed', e); }
 
-    let historySaved = false;
-    try {
-      await saveHistory(record);
-      historySaved = true;
-    } catch (e) {
-      console.error('History save failed:', e?.message || e);
-    }
+    return res.status(200).json({ ok: true, resume: generatedHtml, text: generatedText, quota });
 
-    return res.status(200).json({ ok: true, generated: { html: generatedHtml, text: generatedText }, historySaved });
   } catch (err) {
     console.error('Unhandled /api/generate error:', err);
-    try {
-      const safeBody = (req && (typeof req.body === 'object') && req.body) ? req.body : {};
-      const fb = buildFallback(safeBody.profile || {}, safeBody.jd || '', safeBody.mode || 'ats', safeBody.template || 'classic', safeBody.scope || [], safeBody.nickname || null);
-      return res.status(200).json({ ok: true, generated: { html: fb.html, text: fb.text }, historySaved: false, error: String(err) });
-    } catch (inner) {
-      // This part should no longer crash because slugify is definitely defined
-      console.error('Fallback generation also failed:', inner);
-      return res.status(500).json({ ok: false, error: 'Fatal server error' });
-    }
+    try { const fb = buildFallback((req.body && req.body.profile) || {}, (req.body && req.body.jd) || '', 'ats', 'classic', (req.body && req.body.scope) || [], (req.body && req.body.nickname) || null); const page = wrapFullPage(fb.html, (req.body && req.body.profile) || {}); return res.status(200).json({ ok: true, resume: page, text: fb.text, quota: null, error: String(err) }); } catch(inner){ console.error('fallback also failed', inner); return res.status(500).json({ ok:false, error: 'Fatal server error' }); }
   }
 };
