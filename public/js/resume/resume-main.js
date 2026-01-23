@@ -718,12 +718,26 @@ async function callGenerateAPI(payload) {
 
           // Clean AI HTML: remove server's 'Generated resume for...' heading if present to avoid duplicate headers
           let aiHtml = result.generated.html || '';
-          // strip wrapper start that contains 'Generated resume for ...' and optional mode line
-          aiHtml = aiHtml.replace(/<div[^>]*class=["']?generated-resume["']?[^>]*>\s*<h2>Generated resume for[^<]*<\/h2>\s*(<p>.*?<\/p>)?/i, '');
-          // strip trailing closing div if AI returned a full wrapper
-          aiHtml = aiHtml.replace(/<\/div>\s*$/i, '');
 
-          const combined = `${profileHeader}\n${aiHtml}</div>`; // ensure we close the wrapper
+          // If server returned a full page (DOCTYPE) or already included a profile header, use it directly
+          const containsDoctype = /<!doctype/i.test(aiHtml);
+          const containsProfileHeader = /class=["']?profile-header["']?/i.test(aiHtml) || (currentProfile.fullName && new RegExp(currentProfile.fullName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i').test(aiHtml));
+
+          if (!containsDoctype && !containsProfileHeader) {
+            // strip wrapper start that contains 'Generated resume for ...' and optional mode line
+            aiHtml = aiHtml.replace(/<div[^>]*class=["']?generated-resume["']?[^>]*>\s*<h2>Generated resume for[^<]*<\/h2>\s*(<p>.*?<\/p>)?/i, '');
+            // strip trailing closing div if AI returned a full wrapper
+            aiHtml = aiHtml.replace(/<\/div>\s*$/i, '');
+          }
+
+          let combined = '';
+          if (containsDoctype || containsProfileHeader) {
+            // Use server HTML as-is (already contains header/full page)
+            combined = aiHtml;
+          } else {
+            // prepend our profile header and close wrapper
+            combined = `${profileHeader}\n${aiHtml}</div>`; // ensure we close the wrapper
+          }
 
           // Save as manual override and render the combined result
           lastSavedHtmlOverride = draft.htmlOverride || null;
