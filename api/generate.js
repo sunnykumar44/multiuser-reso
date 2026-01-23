@@ -314,12 +314,14 @@ module.exports = async (req, res) => {
                 // IMPROVE EXISTING
                 const fallbackHtml = sectionToBulletsHtml(existingSec);
                 aiPrompts[pid] = `Refine this list for '${label}': ${JSON.stringify(existingSec)}. Return pipe-separated strings.`;
-                aiFallbacks[pid] = fallbackHtml;
-                aiTypes[pid] = 'block-list';
-                // If this is Character Traits, render as tags
+                
+                // If this is Character Traits, render fallback as tags
                 if ((label||'').toLowerCase().includes('character') || (label||'').toLowerCase().includes('trait')) {
+                    const items = Array.isArray(existingSec.items) ? existingSec.items : [];
+                    aiFallbacks[pid] = items.map(i => `<span class="skill-tag">${escapeHtml(String(i))}</span>`).join('');
                     aiTypes[pid] = 'traits';
                 } else {
+                    aiFallbacks[pid] = fallbackHtml;
                     aiTypes[pid] = 'block-list';
                 }
                 aiLabels[pid] = label;
@@ -373,9 +375,16 @@ module.exports = async (req, res) => {
                 if (val && typeof val === 'string' && val.length > 2) {
                     if (type === 'skills') {
                         // normalize various separators (comma, pipe, newline)
-                        const parts = val.split(/[,|\n;]+/).map(s=>s.trim()).filter(Boolean);
+                        let parts = val.split(/[,|\n;]+/).map(s=>s.trim()).filter(Boolean);
+                        // if AI returned too few skills, augment with JD keywords and defaults
+                        if (parts.length <= 1) {
+                            const extras = extractKeywords(jd, 6).filter(k => !parts.includes(k));
+                            parts = parts.concat(extras.slice(0,4));
+                            // ensure some common defaults
+                            ['Python','SQL','Git'].forEach(d => { if (!parts.includes(d.toLowerCase()) && parts.length < 6) parts.push(d); });
+                        }
                         const chips = parts.length ? parts.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join('') : aiFallbacks[pid];
-                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
                      } 
                      else if (type === 'list') { // Insert LI only (for inside UL)
                          const lis = val.split('|').map(b => `<li>${escapeHtml(b.trim())}</li>`).join('');
