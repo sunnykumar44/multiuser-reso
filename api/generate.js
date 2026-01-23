@@ -237,6 +237,9 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI
+    // track which placeholders were filled by AI vs fallback
+    let placeholdersFilled = {};
+
     if (Object.keys(placeholders).length > 0 && jd) {
         const prompt = `
         JOB DESCRIPTION: ${jd.slice(0, 3000)}
@@ -261,7 +264,6 @@ module.exports = async (req, res) => {
             }
             
             // --- CRITICAL FIX: Loop through REQUESTED placeholders, not received keys ---
-            const placeholdersFilled = {};
             Object.keys(placeholders).forEach(ph => {
                 // Attempt 1: Exact Match
                 let val = aiData[ph];
@@ -304,7 +306,7 @@ module.exports = async (req, res) => {
             });
             // Cleanup
             htmlSkeleton = htmlSkeleton.replace(/\[AI_[^\]]+\]/g, '');
-            const placeholdersFilled = Object.keys(placeholders).reduce((acc,k)=>{acc[k]='error';return acc;},{})
+            placeholdersFilled = Object.keys(placeholders).reduce((acc,k)=>{acc[k]='error';return acc;},{});
         }
     } else {
         // No AI needed, cleanup placeholders (if any existed for some reason)
@@ -312,6 +314,7 @@ module.exports = async (req, res) => {
              htmlSkeleton = htmlSkeleton.split(ph).join(fallbackContent[ph] || "");
         });
         htmlSkeleton = htmlSkeleton.replace(/\[AI_[^\]]+\]/g, '');
+        placeholdersFilled = Object.keys(placeholders).reduce((acc,k)=>{acc[k]='none';return acc;},{});
     }
 
     // Return debug info about placeholders and scope so client can verify
