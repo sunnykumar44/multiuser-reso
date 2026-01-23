@@ -110,9 +110,6 @@ function getDraftKey() {
   return `resumeDraft:${getEffectiveNickname()}`;
 }
 
-// loadDraft/saveDraft are implemented in the Draft model section below.
-// (Removed earlier duplicate implementations to avoid redeclaration errors.)
-
 // --------------------
 // Debug helpers
 // --------------------
@@ -695,70 +692,29 @@ async function callGenerateAPI(payload) {
 
       setStatus('Generating via server...');
       const result = await callGenerateAPI({ profile: currentProfile, jd: jdNow, mode, template, scope, nickname: effectiveNickname });
+      
       if (result && result.generated && result.generated.html) {
-        // Persist returned HTML into draft and render
-        // Clear any previous manual override and render the derived profile (so selected sections show)
-        draft.htmlOverride = "";
+        // --- START OF NEW LOGIC ---
+        // 1. Get the HTML from the server (which now includes styles and full structure)
+        const finalHtml = result.generated.html;
+
+        // 2. Save to draft override
+        draft.htmlOverride = finalHtml;
         saveDraft(draft);
-        if (typeof renderWithDraft === 'function') {
-          renderWithDraft();
+
+        // 3. Render it directly into the paper element
+        if (paperEl) {
+          paperEl.innerHTML = finalHtml;
+          
+          // 4. Make it editable so user can tweak the AI text
+          // Using a broad selector to catch most text elements
+          paperEl.querySelectorAll('p, li, div, span, h1, h2, h3').forEach(el => {
+             el.contentEditable = true; 
+          });
         }
-
-        // Insert AI-generated fragment into a dedicated editable container inside the preview
-        try {
-          // Build a small profile header from the unlocked profile so name/contact appear first
-          const headerParts = [];
-          if (currentProfile.fullName) headerParts.push(`<h1>${escapeHtml(currentProfile.fullName)}</h1>`);
-          const contacts = [];
-          if (currentProfile.phone) contacts.push(escapeHtml(currentProfile.phone));
-          if (currentProfile.email) contacts.push(escapeHtml(currentProfile.email));
-          if (currentProfile.linkedin) contacts.push(`<a href="${escapeHtml(currentProfile.linkedin)}" target="_blank">LinkedIn</a>`);
-          if (contacts.length) headerParts.push(`<div class="profile-contact">${contacts.join(' | ')}</div>`);
-          const profileHeader = `<div class="profile-header">${headerParts.join('')}</div>`;
-
-          // Clean AI HTML: remove server's 'Generated resume for...' heading if present to avoid duplicate headers
-          let aiHtml = result.generated.html || '';
-
-          // If server returned a full page (DOCTYPE) or already included a profile header, use it directly
-          const containsDoctype = /<!doctype/i.test(aiHtml);
-          const containsProfileHeader = /class=["']?profile-header["']?/i.test(aiHtml) || (currentProfile.fullName && new RegExp(currentProfile.fullName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i').test(aiHtml));
-
-          if (!containsDoctype && !containsProfileHeader) {
-            // strip wrapper start that contains 'Generated resume for ...' and optional mode line
-            aiHtml = aiHtml.replace(/<div[^>]*class=["']?generated-resume["']?[^>]*>\s*<h2>Generated resume for[^<]*<\/h2>\s*(<p>.*?<\/p>)?/i, '');
-            // strip trailing closing div if AI returned a full wrapper
-            aiHtml = aiHtml.replace(/<\/div>\s*$/i, '');
-          }
-
-          let combined = '';
-          if (containsDoctype || containsProfileHeader) {
-            // Use server HTML as-is (already contains header/full page)
-            combined = aiHtml;
-          } else {
-            // prepend our profile header and close wrapper
-            combined = `${profileHeader}\n${aiHtml}</div>`; // ensure we close the wrapper
-          }
-
-          // Save as manual override and render the combined result
-          lastSavedHtmlOverride = draft.htmlOverride || null;
-          draft.htmlOverride = combined;
-          saveDraft(draft);
-          if (typeof renderWithDraft === 'function') renderWithDraft();
-
-          // make preview editable and attach autosave (attachEditAutosave already listens to paperEl input)
-          if (paperEl) {
-            paperEl.querySelectorAll('h1,h2,h3,p,li,div').forEach(el => { el.contentEditable = true; });
-          }
-        } catch (e) {
-          console.warn('Failed to integrate AI fragment; falling back to direct insert', e);
-          if (paperEl) {
-            paperEl.innerHTML = result.generated.html;
-            try { paperEl.querySelectorAll('h1,h2,h3,p,li,div').forEach(el => { el.contentEditable = true; }); } catch(_){}
-          }
-          // still persist as override
-          draft.htmlOverride = result.generated.html || '';
-          saveDraft(draft);
-        }
+        
+        setStatus('Resume generated successfully!', 'ok');
+        // --- END OF NEW LOGIC ---
 
         if (typeof History !== 'undefined' && History.addHistoryItem) {
           try {
