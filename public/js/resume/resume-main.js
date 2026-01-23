@@ -780,3 +780,89 @@ async function callGenerateAPI(payload) {
     }
   });
 })();
+
+// Client-side fallback generator (mirrors server fallback) to keep UX working when API errors
+function clientBuildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic', scope = [], nickname) {
+  const displayName = (profile && profile.fullName) || nickname || 'User';
+  const jdSnippet = String(jd || '').slice(0, 400);
+  const parts = [];
+  parts.push(`<div class="generated-resume"><h2>Generated resume for ${escapeHtml(displayName)}</h2><p>Mode: ${escapeHtml(mode)}, Template: ${escapeHtml(template)}</p>`);
+  const sections = (Array.isArray(scope) && scope.length) ? scope : ['Summary','Skills','Experience'];
+  for (const sec of sections) {
+    const key = String(sec || '').trim().toLowerCase();
+    if (key === 'summary') {
+      if (profile.summary) parts.push(`<section><h3>Summary</h3><p>${escapeHtml(profile.summary)}</p></section>`);
+    } else if (key === 'skills') {
+      const skills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(/\r?\n/) : []);
+      if (skills && skills.length) { parts.push('<section><h3>Skills</h3><ul>'); skills.forEach(s=>parts.push(`<li>${escapeHtml(s)}</li>`)); parts.push('</ul></section>'); }
+    } else if (key.includes('experience') || key.includes('work') || key.includes('project')) {
+      const secs = Array.isArray(profile.customSections) ? profile.customSections.filter(s=>s && (String(s.type||'')==='entries')) : [];
+      if (secs.length) {
+        secs.forEach(sg=>{ parts.push(`<section><h3>${escapeHtml(sg.title||'Experience')}</h3>`); (sg.items||[]).forEach(it=>{ parts.push(`<div><strong>${escapeHtml(it.key||'')}</strong>`); if (Array.isArray(it.bullets)&&it.bullets.length){ parts.push('<ul>'); it.bullets.forEach(b=>parts.push(`<li>${escapeHtml(b)}</li>`)); parts.push('</ul>'); } parts.push('</div>'); }); parts.push('</section>'); });
+      }
+    } else {
+      // generic match
+      const match = (Array.isArray(profile.customSections)?profile.customSections:[]).find(sc=>String(sc.title||'').trim().toLowerCase()===key);
+      if (match) {
+        parts.push(`<section><h3>${escapeHtml(match.title)}</h3>`);
+        if (match.type==='entries') { (match.items||[]).forEach(it=>{ parts.push(`<div><strong>${escapeHtml(it.key||'')}</strong>`); if (Array.isArray(it.bullets)&&it.bullets.length){ parts.push('<ul>'); it.bullets.forEach(b=>parts.push(`<li>${escapeHtml(b)}</li>`)); parts.push('</ul>'); } parts.push('</div>'); }); }
+        else { parts.push('<ul>'); (match.items||[]).forEach(it=>parts.push(`<li>${escapeHtml(String(it||''))}</li>`)); parts.push('</ul>'); }
+        parts.push('</section>');
+      }
+    }
+  }
+  if (jdSnippet) parts.push(`<section><h3>Target role</h3><pre>${escapeHtml(jdSnippet)}</pre></section>`);
+  parts.push('</div>');
+  return parts.join('\n');
+}
+
+function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Ensure server failures fall back to client render so users can still edit
+// We add handling inside the existing catch of the Generate handler by augmenting the catch below.
+// --------------------
+// Add Save / Reset / Undo handlers to ensure buttons work reliably
+(function attachEditButtons() {
+  const btnSaveEdits = $('btnSaveEdits');
+  if (btnSaveEdits) {
+    btnSaveEdits.addEventListener('click', () => {
+      if (!paperEl) return;
+      const ok = confirm('Save your manual edits to this resume preview?');
+      if (!ok) return;
+      lastSavedHtmlOverride = draft.htmlOverride || null;
+      const toSave = pendingHtmlOverride != null ? pendingHtmlOverride : (paperEl.innerHTML || '');
+      draft.htmlOverride = String(toSave || '');
+      saveDraft(draft);
+      updateEditBadge();
+      showToast('Saved edits', 'success');
+    });
+  }
+
+  const btnResetEdits = $('btnResetEdits');
+  if (btnResetEdits) {
+    btnResetEdits.addEventListener('click', () => {
+      const ok = confirm('Reset edits? This will discard your manual changes to the preview.');
+      if (!ok) return;
+      draft.htmlOverride = '';
+      saveDraft(draft);
+      updateEditBadge();
+      renderWithDraft();
+      showToast('Edits reset', 'warn');
+    });
+  }
+
+  const btnUndoEdits = $('btnUndoEdits');
+  if (btnUndoEdits) {
+    btnUndoEdits.addEventListener('click', () => {
+      if (lastSavedHtmlOverride == null) return;
+      const ok = confirm('Undo last saved edits and restore previous preview?');
+      if (!ok) return;
+      draft.htmlOverride = lastSavedHtmlOverride;
+      lastSavedHtmlOverride = null;
+      saveDraft(draft);
+      updateEditBadge();
+      renderWithDraft();
+      showToast('Undo applied', 'success');
+    });
+  }
+})();

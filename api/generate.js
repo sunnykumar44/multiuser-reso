@@ -202,6 +202,15 @@ module.exports = async (req, res) => {
   }
 };
 
+// Helper: slugify a string for safe CSS class/id usage
+function slugify(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-_]/g, '');
+}
+
 function escapeHtml(s = "") {
   return String(s)
     .replace(/&/g, '&amp;')
