@@ -1,48 +1,65 @@
 const { saveHistory } = require("./firebase");
 
+// --- HELPER FUNCTIONS (Defined at top to prevent ReferenceErrors) ---
+function slugify(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-_]/g, '');
+}
+
+function escapeHtml(s = "") {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+// -------------------------------------------------------------------
+
 const GCP_API_KEY = process.env.GCP_API_KEY || process.env.GOOGLE_API_KEY || null;
 
 async function callGcpGenerate(promptText, maxTokens = 1024) {
   if (!GCP_API_KEY) throw new Error('GCP_API_KEY not configured');
+  
   const url = `https://generativelanguage.googleapis.com/v1beta2/models/text-bison-001:generate?key=${encodeURIComponent(GCP_API_KEY)}`;
   const body = { prompt: { text: promptText }, maxOutputTokens: Math.min(2048, maxTokens) };
+  
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+
   if (!resp.ok) {
     const txt = await resp.text().catch(() => '');
     throw new Error(`GCP generate failed ${resp.status}: ${txt}`);
   }
+  
   const j = await resp.json();
-  // Attempt to extract text from known response shapes
   const candidate = j?.candidates && j.candidates[0];
   if (candidate) {
     if (typeof candidate.output === 'string') return candidate.output;
     if (typeof candidate.content === 'string') return candidate.content;
     if (candidate?.message?.content && Array.isArray(candidate.message.content)) {
-      // join message content pieces
       return candidate.message.content.map(c => c?.text || '').join('\n');
     }
   }
-  // Fallback: return full JSON string
   return JSON.stringify(j);
 }
 
-/**
- * POST /api/generate
- * Body: { profile, jd, mode, template, scope, nickname }
- */
 function buildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic', safeScope = [], nickname) {
   const displayName = (profile && profile.fullName) || nickname || 'User';
   const jdSnippet = escapeHtml((jd || '').slice(0, 400));
   const sectionsToRender = (Array.isArray(safeScope) && safeScope.length) ? safeScope : ['Summary', 'Skills', 'Experience'];
   const pieces = [];
+
   pieces.push(`<div class="generated-resume"><h2>Generated resume for ${escapeHtml(displayName)}</h2><p>Mode: ${escapeHtml(mode)}, Template: ${escapeHtml(template)}</p>`);
+
   for (const sec of sectionsToRender) {
     const s = String(sec || '').trim();
     const key = s.toLowerCase();
+
     if (key === 'summary') {
       const txt = (profile && profile.summary) ? escapeHtml(profile.summary) : '';
       if (txt) pieces.push(`<section class="sec-summary"><h3>Summary</h3><p>${txt}</p></section>`);
@@ -53,11 +70,12 @@ function buildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic'
         for (const sk of skills) pieces.push(`<li>${escapeHtml(String(sk))}</li>`);
         pieces.push('</ul></section>');
       }
-    } else if (key === 'experience' || key.includes('work') || key.includes('project') || key === 'work experience') {
+    } else if (key === 'experience' || key.includes('work') || key.includes('project')) {
       const secs = Array.isArray(profile.customSections) ? profile.customSections.filter(s => s && (String(s.type||'')==='entries' || (String(s.title||'').toLowerCase().includes('work') || String(s.title||'').toLowerCase().includes('project')))) : [];
       if (secs.length) {
         for (const sg of secs) {
           const title = escapeHtml(sg.title || 'Experience');
+          // slugify is now guaranteed to exist
           pieces.push(`<section class="sec-${slugify(title)}"><h3>${title}</h3>`);
           for (const it of (sg.items || [])) {
             const heading = escapeHtml(it.key || '');
@@ -89,6 +107,7 @@ function buildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic'
       }
     }
   }
+
   if (jdSnippet) {
     pieces.push(`<section class="sec-role"><h3>Target role</h3><pre>${jdSnippet}</pre></section>`);
   }
@@ -97,7 +116,6 @@ function buildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic'
 }
 
 module.exports = async (req, res) => {
-  // CORS (ok for testing; restrict later)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -109,7 +127,6 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // existing handler logic
     let body = {};
     try {
       body = typeof req.body === "object" ? req.body : JSON.parse(req.body || "{}");
@@ -123,9 +140,10 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Missing job description (jd)', ok: false, generated: { html: fallback.html, text: fallback.text } });
     }
 
-    // Build strict prompt for the AI
     const safeProfile = profile && typeof profile === 'object' ? profile : {};
     const safeScope = Array.isArray(scope) ? scope : [];
+    
+    // ... Prompt generation ...
     const promptLines = [];
     promptLines.push("You are an assistant that generates an HTML resume fragment.");
     promptLines.push("Follow these rules exactly:");
@@ -149,11 +167,9 @@ module.exports = async (req, res) => {
     let generatedHtml = null;
     let generatedText = null;
 
-    // Try GCP Generative API if configured
     if (GCP_API_KEY) {
       try {
         const aiText = await callGcpGenerate(fullPrompt, 1024);
-        // aiText expected to be HTML; if not, wrap safely
         generatedHtml = String(aiText);
         generatedText = (generatedHtml || '').replace(/<[^>]+>/g, '').slice(0, 1000);
       } catch (err) {
@@ -161,7 +177,6 @@ module.exports = async (req, res) => {
       }
     }
 
-    // Fallback to structured HTML built from profile + scope when no AI result
     if (!generatedHtml) {
       const fallback = buildFallback(profile || {}, jd || '', mode, template, scope || [], nickname);
       generatedHtml = fallback.html;
@@ -190,30 +205,14 @@ module.exports = async (req, res) => {
     return res.status(200).json({ ok: true, generated: { html: generatedHtml, text: generatedText }, historySaved });
   } catch (err) {
     console.error('Unhandled /api/generate error:', err);
-    // build fallback response and return 200 so frontend can render
     try {
       const safeBody = (req && (typeof req.body === 'object') && req.body) ? req.body : {};
       const fb = buildFallback(safeBody.profile || {}, safeBody.jd || '', safeBody.mode || 'ats', safeBody.template || 'classic', safeBody.scope || [], safeBody.nickname || null);
       return res.status(200).json({ ok: true, generated: { html: fb.html, text: fb.text }, historySaved: false, error: String(err) });
     } catch (inner) {
+      // This part should no longer crash because slugify is definitely defined
       console.error('Fallback generation also failed:', inner);
       return res.status(500).json({ ok: false, error: 'Fatal server error' });
     }
   }
 };
-
-// Helper: slugify a string for safe CSS class/id usage
-function slugify(s) {
-  return String(s || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9-_]/g, '');
-}
-
-function escapeHtml(s = "") {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
