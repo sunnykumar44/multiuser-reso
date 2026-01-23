@@ -706,54 +706,45 @@ async function callGenerateAPI(payload) {
 
         // Insert AI-generated fragment into a dedicated editable container inside the preview
         try {
-          const aiContainerId = 'ai-generated-fragment';
-          // remove existing container
-          const old = document.getElementById(aiContainerId);
-          if (old && old.parentNode) old.parentNode.removeChild(old);
+          // Build a small profile header from the unlocked profile so name/contact appear first
+          const headerParts = [];
+          if (currentProfile.fullName) headerParts.push(`<h1>${escapeHtml(currentProfile.fullName)}</h1>`);
+          const contacts = [];
+          if (currentProfile.phone) contacts.push(escapeHtml(currentProfile.phone));
+          if (currentProfile.email) contacts.push(escapeHtml(currentProfile.email));
+          if (currentProfile.linkedin) contacts.push(`<a href="${escapeHtml(currentProfile.linkedin)}" target="_blank">LinkedIn</a>`);
+          if (contacts.length) headerParts.push(`<div class="profile-contact">${contacts.join(' | ')}</div>`);
+          const profileHeader = `<div class="profile-header">${headerParts.join('')}</div>`;
 
-          const fragWrap = document.createElement('div');
-          fragWrap.id = aiContainerId;
-          fragWrap.className = 'ai-generated-fragment';
-          fragWrap.style.marginTop = '12px';
-          fragWrap.contentEditable = 'true';
-          fragWrap.spellcheck = false;
-          fragWrap.innerHTML = result.generated.html;
+          // Clean AI HTML: remove server's 'Generated resume for...' heading if present to avoid duplicate headers
+          let aiHtml = result.generated.html || '';
+          // strip wrapper start that contains 'Generated resume for ...' and optional mode line
+          aiHtml = aiHtml.replace(/<div[^>]*class=["']?generated-resume["']?[^>]*>\s*<h2>Generated resume for[^<]*<\/h2>\s*(<p>.*?<\/p>)?/i, '');
+          // strip trailing closing div if AI returned a full wrapper
+          aiHtml = aiHtml.replace(/<\/div>\s*$/i, '');
 
-          // append to paperEl so both profile sections and AI fragment are visible
-          if (paperEl) paperEl.appendChild(fragWrap);
+          const combined = `${profileHeader}\n${aiHtml}</div>`; // ensure we close the wrapper
 
-          // autosave edits from AI fragment into draft.htmlOverride
-          const saveAiFragment = () => {
-            draft.htmlOverride = (paperEl && paperEl.innerHTML) || fragWrap.innerHTML || '';
-            saveDraft(draft);
-            updateEditBadge();
-          };
+          // Save as manual override and render the combined result
+          lastSavedHtmlOverride = draft.htmlOverride || null;
+          draft.htmlOverride = combined;
+          saveDraft(draft);
+          if (typeof renderWithDraft === 'function') renderWithDraft();
 
-          fragWrap.addEventListener('input', () => {
-            // debounce slight
-            if (typeof window.__aiSaveTimeout !== 'undefined') clearTimeout(window.__aiSaveTimeout);
-            window.__aiSaveTimeout = setTimeout(saveAiFragment, 600);
-          });
-
-          // make common text elements contenteditable for immediate inline editing
+          // make preview editable and attach autosave (attachEditAutosave already listens to paperEl input)
           if (paperEl) {
-            paperEl.querySelectorAll('h1,h2,h3,p,li,div').forEach(el => {
-              if (!el.isContentEditable) el.contentEditable = true;
-            });
+            paperEl.querySelectorAll('h1,h2,h3,p,li,div').forEach(el => { el.contentEditable = true; });
           }
         } catch (e) {
-          console.warn('Failed to insert AI fragment editable container', e);
-          // fallback: ensure preview shows returned HTML
-          if (paperEl) paperEl.innerHTML = result.generated.html;
+          console.warn('Failed to integrate AI fragment; falling back to direct insert', e);
+          if (paperEl) {
+            paperEl.innerHTML = result.generated.html;
+            try { paperEl.querySelectorAll('h1,h2,h3,p,li,div').forEach(el => { el.contentEditable = true; }); } catch(_){}
+          }
+          // still persist as override
+          draft.htmlOverride = result.generated.html || '';
+          saveDraft(draft);
         }
-         // Persist using the effective nickname key so drafts are tied to the right user
-         try {
-           const draftKey = `resumeDraft:${effectiveNickname}`;
-           sessionStorage.setItem(draftKey, JSON.stringify(draft));
-         } catch (e) { /* ignore storage errors */ }
-         updateEditBadge();
-         setStatus('Generated (server)');
-         showToast('Generated', 'success', 1600);
 
         if (typeof History !== 'undefined' && History.addHistoryItem) {
           try {
