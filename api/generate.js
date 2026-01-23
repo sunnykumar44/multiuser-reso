@@ -92,7 +92,7 @@ module.exports = async (req, res) => {
 
   try {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-    const { profile, jd, nickname } = body;
+    const { profile, jd, nickname, mode, scope } = body;
 
     // 1. Build Static HTML Parts (Name, Contact, Education)
     // We do this in JS so it's 100% accurate and never hallucinated

@@ -727,6 +727,35 @@ async function callGenerateAPI(payload) {
             paperEl.innerHTML = draft.htmlOverride;
             // make editable
             paperEl.querySelectorAll('p, li, div, span, h1, h2, h3').forEach(el => { el.contentEditable = true; });
+
+            // Lock static profile header and contact info so user-provided values remain unchanged
+            try {
+              // If server provided a profile header with class 'profile-header', lock it
+              const headerEl = paperEl.querySelector('.profile-header');
+              if (headerEl) {
+                headerEl.contentEditable = false;
+                headerEl.querySelectorAll('*').forEach(ch => ch.contentEditable = false);
+              }
+
+              // Lock profile-contact block if present
+              const contactEl = paperEl.querySelector('.profile-contact');
+              if (contactEl) {
+                contactEl.contentEditable = false;
+                contactEl.querySelectorAll('*').forEach(ch => ch.contentEditable = false);
+              }
+
+              // Also lock any element whose text matches fullName, email, or phone exactly
+              const lockValues = [currentProfile.fullName, currentProfile.email, currentProfile.phone].filter(Boolean).map(v => String(v).trim());
+              if (lockValues.length) {
+                const allEls = Array.from(paperEl.querySelectorAll('*'));
+                for (const val of lockValues) {
+                  const match = allEls.find(el => el.textContent && el.textContent.trim() === val);
+                  if (match) { match.contentEditable = false; match.querySelectorAll('*').forEach(ch => ch.contentEditable = false); }
+                }
+              }
+            } catch (lockErr) {
+              console.warn('Failed to lock static profile fields', lockErr);
+            }
           } catch (e) {
             // fallback
             paperEl.innerHTML = draft.htmlOverride;
