@@ -36,6 +36,8 @@ const RESUME_CSS = `
     .generated-resume ul { margin-left: 18px; margin-top: 4px; padding: 0; }
     .generated-resume li { margin-bottom: 3px; font-size: 11px; }
     .generated-resume p { margin-bottom: 4px; font-size: 11px; }
+    /* skill-box: inline skills appearance */
+    .skill-box { background:#f1f5f9; padding:8px 10px; border-radius:6px; display:inline-block; font-size:11px; color:#0f172a; }
   </style>
 `;
 
@@ -241,13 +243,45 @@ module.exports = async (req, res) => {
             } catch (e) { console.error("JSON Error", e); }
 
             Object.keys(aiPrompts).forEach(pid => {
-                const val = aiData[pid];
-                // Replace placeholder if valid content returned
-                if (val && typeof val === 'string' && val.length > 5) {
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, val);
-                } else {
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+                const rawVal = aiData[pid] || aiData[pid.replace(/[\[\]]/g,'')] || null;
+                let val = rawVal;
+
+                // Try to find a matching key ignoring case and brackets if exact key missing
+                if (!val) {
+                  const lowerKeys = Object.keys(aiData || {}).reduce((acc,k)=>{acc[k.toLowerCase()]=aiData[k];return acc;},{});
+                  const alt = lowerKeys[pid.toLowerCase().replace(/\[|\]/g,'')];
+                  if (alt) val = alt;
                 }
+
+                // If still missing or too short, generate heuristic based on requested prompt
+                if (!val || (typeof val === 'string' && val.trim().length < 5)) {
+                  const promptText = (aiPrompts[pid] || '').toLowerCase();
+                  if (/summary/.test(promptText)) {
+                    val = makeHeuristicSummary(profile, jd);
+                  } else if (/skill/.test(promptText)) {
+                    // render skills as inline box (preferred)
+                    const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
+                    if (userSkills.length) {
+                      val = `<div class="skill-box">${userSkills.map(s=>escapeHtml(s)).join(' • ')}</div>`;
+                    } else {
+                      val = makeHeuristicSkills(profile, jd);
+                    }
+                  } else if (/bullet|role|write 3|write 2|points/.test(promptText)) {
+                    // role bullets
+                    // extract role name from prompt if possible
+                    const m = promptText.match(/role '([^']+)'/i) || promptText.match(/role "([^"]+)"/i);
+                    const roleKey = m ? slugify(m[1]) : pid.replace(/\[AI_BULLETS_FOR_(.+)\]/,'$1');
+                    val = makeHeuristicBulletsForRole(profile, roleKey, jd);
+                  } else {
+                    // generic section heuristic: two example items
+                    const keys = extractKeywords(jd, 4);
+                    const examples = (keys.length ? keys.slice(0,2).map(k=>`<li>Relevant: ${escapeHtml(k)}</li>`) : ['<li>Example item 1</li>','<li>Example item 2</li>']);
+                    val = `<ul>${examples.join('')}</ul>`;
+                  }
+                }
+
+                // Replace placeholder marker in skeleton
+                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, val);
             });
 
         } catch (e) {
