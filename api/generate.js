@@ -16,23 +16,24 @@ function inventedFallbackForSection(title, jd) {
   if (t.includes("certification")) {
     return `<ul>
       <li>AWS Certified Cloud Practitioner (Invented)</li>
-      <li>Certified Entry-Level Python Programmer (PCEP)</li>
+      <li>PCEP – Certified Entry-Level Python Programmer</li>
+      <li>Google IT Automation with Python</li>
     </ul>`;
   }
   if (t.includes("achievement")) {
     return `<ul>
-      <li>Awarded 'Best Student Project' for final year submission.</li>
-      <li>Solved 500+ coding problems on LeetCode/HackerRank.</li>
+      <li>Awarded 'Best Student Project' for final year submission among 50+ entries.</li>
+      <li>Solved 500+ coding problems on LeetCode/HackerRank, achieving a top 5% rank.</li>
     </ul>`;
   }
   if (t.includes("trait") || t.includes("character")) {
-    // Return as pipe-separated for the chip parser
-    return "Fast Learner | Team Player | Problem Solver | Adaptable | Proactive";
+    // Return pipe-separated for chip parsing
+    return "Enthusiastic | Fast Learner | Team Player | Adaptable | Proactive | Reliable | Detail-Oriented";
   }
   if (t.includes("project")) {
     return `<ul>
-      <li><strong>Portfolio Website:</strong> Built a responsive site using React and deployed on Vercel.</li>
-      <li><strong>Task App:</strong> Created a Python CLI tool for managing daily tasks.</li>
+      <li><strong>Portfolio Website:</strong> Built a fully responsive personal portfolio using React.js and Tailwind CSS, deploying it on Vercel with CI/CD pipelines.</li>
+      <li><strong>Task Management CLI:</strong> Developed a Python-based command-line tool to track daily tasks, utilizing SQLite for persistence and reducing manual tracking time by 40%.</li>
     </ul>`;
   }
   return `<ul><li>Relevant skill or achievement aligned with the job description.</li></ul>`;
@@ -42,7 +43,7 @@ function inventedFallbackForSection(title, jd) {
 function canonicalSectionName(name) {
   const s = String(name || "").trim().toLowerCase();
   if (s.includes("work") || s.includes("experience")) return "Work Experience"; 
-  if (s.includes("technical") || s.includes("skill")) return "Skills";
+  if (s.includes("technical") || s.includes("skill")) return "Technical Skills";
   if (s.includes("summary")) return "Summary";
   if (s.includes("education")) return "Education";
   if (s.includes("project")) return "Projects";
@@ -79,7 +80,7 @@ const RESUME_CSS = `
     .resume-company { font-style: italic; color: #444; margin-bottom: 2px; display: block; }
     .generated-resume ul { margin-left: 18px; margin-top: 4px; padding: 0; }
     .generated-resume li { margin-bottom: 3px; font-size: 11px; }
-    .generated-resume p { margin-bottom: 4px; font-size: 11px; }
+    .generated-resume p { margin-bottom: 4px; font-size: 11px; text-align: justify; }
     
     /* BOX/CHIP STYLE */
     .skill-tag {
@@ -104,8 +105,8 @@ async function callGeminiFlash(promptText) {
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
-      temperature: 0.85, 
-      maxOutputTokens: 3000,
+      temperature: 0.9, // High creativity for detailed expansions
+      maxOutputTokens: 4000,
       responseMimeType: "application/json"
     }
   };
@@ -156,7 +157,7 @@ module.exports = async (req, res) => {
     // --- SCOPE DEDUPLICATION ---
     const seen = new Set();
     const sectionsToRender = [];
-    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Skills', 'Work Experience', 'Education'];
+    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Character Traits'];
     
     for (const s of rawScope) {
         const c = canonicalSectionName(s);
@@ -166,7 +167,7 @@ module.exports = async (req, res) => {
         }
     }
 
-    const priority = ['Summary', 'Skills', 'Work Experience', 'Projects', 'Education', 'Character Traits'];
+    const priority = ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Character Traits'];
     sectionsToRender.sort((a, b) => {
         const ia = priority.indexOf(a.canonical);
         const ib = priority.indexOf(b.canonical);
@@ -186,50 +187,60 @@ module.exports = async (req, res) => {
             const pid = `sec_${sectionCounter++}`;
             const original = profile.summary || "";
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `Write a professional 3-sentence summary for a Fresher/Entry-Level '${jd.slice(0,50)}' role. Input: "${original}". Focus on potential, quick learning, and education.`;
-            aiFallbacks[pid] = original.length > 10 ? `<p>${escapeHtml(original)}</p>` : `<p>Results-oriented Fresher aspiring to work as a ${jd.slice(0,30)}.</p>`;
+            
+            // PROMPT: Force 4-5 sentences, NO bullets.
+            aiPrompts[pid] = `Write a robust, professional summary (4-5 sentences) for a Fresher/Entry-Level '${jd.slice(0,100)}' role. Input: "${original}". Incorporate keywords from the Job Description: "${jd.slice(0, 300)}...". Format as a single cohesive paragraph. NO bullet points.`;
+            
+            aiFallbacks[pid] = original.length > 20 ? `<p>${escapeHtml(original)}</p>` : `<p>Highly motivated Fresher with a strong foundation in software development, aspiring to contribute to a dynamic team as a ${jd.slice(0,30)}.</p>`;
             aiTypes[pid] = 'summary';
         }
         
-        // --- B. SKILLS (CHIPS) ---
-        else if (label === 'Skills') {
+        // --- B. SKILLS (CHIPS - FORCED EXPANSION > 12) ---
+        else if (label === 'Technical Skills') {
             resumeBodyHtml += `<div class="resume-section-title">Technical Skills</div>`;
             const pid = `sec_${sectionCounter++}`;
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
             
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            // Force AI to invent at least 10 skills
-            aiPrompts[pid] = `List 10-15 technical skills for '${jd.slice(0,50)}'. MUST INCLUDE: ${userSkills.join(', ')}. Return simple comma-separated list.`;
+            // PROMPT: Force 12-18 skills
+            aiPrompts[pid] = `List 12-18 technical skills relevant to '${jd.slice(0,100)}'. MUST INCLUDE: ${userSkills.join(', ')}. Analyze the JD and extract relevant tools/frameworks to reach at least 12 skills. Return simple comma-separated list.`;
             
-            // Fallback: If AI fails, use Python + others
-            const fallbackList = userSkills.length ? userSkills : ["Python", "SQL", "Git", "Problem Solving"];
+            // FALLBACK: If AI fails, we must manually append generic skills
+            let fallbackList = userSkills.length ? [...userSkills] : ["Python"];
+            const generics = ["SQL", "Git", "GitHub", "VS Code", "REST APIs", "JSON", "Debugging", "Agile", "HTML/CSS", "Linux"];
+            if (fallbackList.length < 10) {
+                fallbackList = [...new Set([...fallbackList, ...generics])];
+            }
             aiFallbacks[pid] = fallbackList.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join('');
             aiTypes[pid] = 'chips';
         }
         
-        // --- C. CHARACTER TRAITS (CHIPS) ---
+        // --- C. CHARACTER TRAITS (CHIPS - FORCED EXPANSION) ---
         else if (label === 'Character Traits') {
             resumeBodyHtml += `<div class="resume-section-title">Character Traits</div>`;
             const pid = `sec_${sectionCounter++}`;
             
-            // Try to find existing
             const existingSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('trait') || s.title.toLowerCase().includes('character'));
             const original = existingSec ? (existingSec.items || []).join(', ') : "";
 
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `List 6 professional character traits (e.g. Hardworking, Enthusiastic). Input: "${original}". Return comma-separated list.`;
             
-            // Fallback
-            const fallbackStr = original || "Enthusiastic | Quick Learner | Responsible | Team Player";
-            // Convert fallback pipe/comma to chips
-            const cleanFallback = fallbackStr.split(/[,|]/).map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join('');
+            // PROMPT: Force 6-8 traits
+            aiPrompts[pid] = `List 6-8 professional character traits. Input: "${original}". Return comma-separated list.`;
+            
+            // FALLBACK
+            let fallbackItems = original.split(',').filter(x=>x).map(s=>s.trim());
+            if (fallbackItems.length < 6) {
+                fallbackItems.push("Quick Learner", "Team Player", "Responsible", "Adaptable", "Detail-Oriented", "Communicator");
+            }
+            const cleanFallback = fallbackItems.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join('');
             
             aiFallbacks[pid] = cleanFallback;
             aiTypes[pid] = 'chips';
         }
 
-        // --- D. WORK EXPERIENCE (Duplication Fixed) ---
+        // --- D. WORK EXPERIENCE (LONG SENTENCES) ---
         else if (label === 'Work Experience') {
             const experienceSections = (profile.customSections || [])
                .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')));
@@ -241,7 +252,6 @@ module.exports = async (req, res) => {
                         const pid = `sec_${sectionCounter++}`;
                         const originalBullets = (Array.isArray(item.bullets) && item.bullets.length) ? item.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('') : "";
                         
-                        // Strict check to hide Company Name if it is "Work Experience"
                         let companyName = sec.title;
                         const lowerTitle = sec.title.toLowerCase().trim();
                         if (lowerTitle === 'work experience' || lowerTitle === 'experience' || lowerTitle === 'work') {
@@ -258,7 +268,8 @@ module.exports = async (req, res) => {
                             <ul id="${pid}">[${pid}]</ul>
                           </div>`;
                         
-                        aiPrompts[pid] = `Rewrite these bullets: "${item.bullets}". Make them impactful. Return pipe-separated string.`;
+                        // PROMPT: Detailed sentences
+                        aiPrompts[pid] = `Rewrite these bullets for '${item.key}': "${item.bullets}". Write 3 LONG, DETAILED sentences focusing on metrics, tools used, and impact on the business. Tailor to JD: "${jd.slice(0,200)}...". Return pipe-separated string.`;
                         aiFallbacks[pid] = originalBullets || `<li>${escapeHtml(item.key)}</li>`;
                         aiTypes[pid] = 'list';
                     }
@@ -268,13 +279,42 @@ module.exports = async (req, res) => {
                 resumeBodyHtml += `<div class="resume-section-title">Work Experience</div>`;
                 const pid = `sec_${sectionCounter++}`;
                 resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-                aiPrompts[pid] = `Generate 2 generic 'Personal Project' bullets for '${jd.slice(0,50)}' (Fresher). Pipe-separated.`;
+                aiPrompts[pid] = `Generate 2 detailed 'Personal Project' bullets for '${jd.slice(0,50)}'. Write them as full sentences describing the tech stack and outcome. Pipe-separated.`;
                 aiFallbacks[pid] = "<ul><li><i>(No experience data)</i></li></ul>";
                 aiTypes[pid] = 'block-list';
             }
         }
+
+        // --- E. PROJECTS ---
+        else if (label === 'Projects') {
+             resumeBodyHtml += `<div class="resume-section-title">Projects</div>`;
+             const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
+             
+             if (projSec && projSec.items && projSec.items.length) {
+                 const limitItems = projSec.items.slice(0, 2);
+                 for (const item of limitItems) {
+                    const pid = `sec_${sectionCounter++}`;
+                    resumeBodyHtml += `
+                      <div class="resume-item">
+                        <div class="resume-row">
+                          <span class="resume-role">${escapeHtml(item.key)}</span>
+                        </div>
+                        <ul id="${pid}">[${pid}]</ul>
+                      </div>`;
+                    aiPrompts[pid] = `Write 2 detailed bullets for project '${item.key}': "${item.bullets}". Describe the architecture and technologies used. Return pipe-separated.`;
+                    aiFallbacks[pid] = item.bullets ? `<li>${escapeHtml(item.bullets[0])}</li>` : `<li>${escapeHtml(item.key)}</li>`;
+                    aiTypes[pid] = 'list';
+                 }
+             } else {
+                 const pid = `sec_${sectionCounter++}`;
+                 resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
+                 aiPrompts[pid] = `Invent 2 academic projects for fresher applying to '${jd.slice(0,50)}'. Format: "<b>Title:</b> Detailed description of the project... | <b>Title:</b> Detailed description..."`;
+                 aiFallbacks[pid] = inventedFallbackForSection('project', jd);
+                 aiTypes[pid] = 'block-list';
+             }
+        }
         
-        // --- E. EDUCATION ---
+        // --- F. EDUCATION ---
         else if (label === 'Education') {
              resumeBodyHtml += `<div class="resume-section-title">Education</div>`;
              const eduList = (profile.education && profile.education.length) 
@@ -290,7 +330,7 @@ module.exports = async (req, res) => {
              resumeBodyHtml += `</div>`;
         }
         
-        // --- F. OTHER SECTIONS (Invented) ---
+        // --- G. OTHERS (Certifications, Achievements) ---
         else {
             resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
             const pid = `sec_${sectionCounter++}`;
@@ -299,21 +339,20 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
             if (existingSec) {
-                // If it's a list (like Traits), convert to chips? No, only specific sections get chips.
                 const items = existingSec.items || [];
                 const fallbackList = items.map(i => `<li>${escapeHtml(i)}</li>`).join('');
-                aiPrompts[pid] = `Refine this list: ${JSON.stringify(items)}. Return pipe-separated.`;
+                aiPrompts[pid] = `Refine this list: ${JSON.stringify(items)}. Make them detailed sentences. Return pipe-separated.`;
                 aiFallbacks[pid] = `<ul>${fallbackList}</ul>`;
                 aiTypes[pid] = 'block-list';
             } else {
-                aiPrompts[pid] = `User checked '${label}' but has no data. INVENT 2 examples for '${jd.slice(0,50)}'. Return pipe-separated.`;
+                aiPrompts[pid] = `User checked '${label}' but has no data. INVENT 2 realistic, detailed examples for '${jd.slice(0,50)}'. Return pipe-separated.`;
                 aiFallbacks[pid] = inventedFallbackForSection(label, jd);
                 aiTypes[pid] = 'block-list';
             }
         }
     }
 
-    // --- STEP 3: CALL AI ---
+    // --- STEP 3: CALL AI & FORMAT ---
     let htmlSkeleton = `
     <div class="generated-resume">
       ${RESUME_CSS}
@@ -344,7 +383,7 @@ module.exports = async (req, res) => {
                 const type = aiTypes[pid];
                 
                 if (val && typeof val === 'string' && val.length > 2) {
-                    if (type === 'chips') { // Skills & Traits
+                    if (type === 'chips') { 
                         const chips = val.split(/[,|]/).map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join('');
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
                     } 
