@@ -9,6 +9,55 @@ function escapeHtml(s = "") {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Heuristic helpers: used when AI fails or returns no content
+function extractKeywords(text, limit = 6) {
+  if (!text || typeof text !== 'string') return [];
+  const stop = new Set(['the','and','to','a','an','of','in','for','with','on','as','is','are','be','by','at','from','that','this','will','have','has']);
+  const toks = text.toLowerCase().replace(/[^a-z0-9\s\-_/\.]/g,' ').split(/\s+/).filter(Boolean);
+  const counts = {};
+  for (const t of toks) {
+    if (t.length < 3) continue;
+    if (stop.has(t)) continue;
+    counts[t] = (counts[t]||0)+1;
+  }
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,limit).map(x=>x[0]);
+}
+
+function makeHeuristicSummary(profile, jd) {
+  const name = (profile && (profile.fullName || profile.nickname)) ? (profile.fullName || profile.nickname) : '';
+  const skills = Array.isArray(profile.skills) ? profile.skills.slice(0,3) : [];
+  const jdKeys = extractKeywords(jd, 3);
+  const parts = [];
+  if (name) parts.push(`${name} is a ${skills[0] ? skills[0] + ' professional' : 'skilled professional'}.`);
+  if (skills.length) parts.push(`Experienced with ${skills.join(', ')}.`);
+  if (jdKeys.length) parts.push(`Relevant experience includes ${jdKeys.join(', ')}.`);
+  return `<p>${parts.join(' ')}</p>`;
+}
+
+function makeHeuristicSkills(profile, jd) {
+  const skills = Array.isArray(profile.skills) && profile.skills.length ? profile.skills : extractKeywords(jd, 8);
+  if (!skills || !skills.length) return '';
+  return '<ul>' + skills.slice(0,8).map(s => `<li>${escapeHtml(String(s))}</li>`).join('') + '</ul>';
+}
+
+function makeHeuristicBulletsForRole(profile, roleKey, jd) {
+  const sections = Array.isArray(profile.customSections) ? profile.customSections : [];
+  let roleTitle = roleKey.replace(/[-_]/g,' ');
+  for (const sec of sections) {
+    if (!sec || !Array.isArray(sec.items)) continue;
+    for (const it of sec.items) {
+      if (slugify(it.key) === roleKey) { roleTitle = it.key; break; }
+    }
+  }
+  const jdKeys = extractKeywords(jd, 3);
+  const topSkill = (Array.isArray(profile.skills) && profile.skills[0]) ? profile.skills[0] : (jdKeys[0] || 'relevant technologies');
+  const bullets = [];
+  bullets.push(`<li>Implemented ${escapeHtml(roleTitle)} features using ${escapeHtml(topSkill)}, addressing core requirements.</li>`);
+  bullets.push(`<li>Collaborated cross-functionally to deliver improvements related to ${escapeHtml(jdKeys[0] || 'system performance')}.</li>`);
+  bullets.push(`<li>Improved process or metrics through testing, automation, and deployment efforts.</li>`);
+  return bullets.join('');
+}
+
 // --- CONSTANTS ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
@@ -226,9 +275,18 @@ module.exports = async (req, res) => {
                     // Success: Use AI content
                     htmlSkeleton = htmlSkeleton.split(ph).join(val);
                 } else {
-                    // Fail: Revert to Original content (Fallback)
-                    // This prevents [AI_SKILLS] from staying on screen
-                    htmlSkeleton = htmlSkeleton.split(ph).join(fallbackContent[ph] || "");
+                    // Fail: Revert to Original content (Fallback) or heuristics
+                    let replacement = fallbackContent[ph] || "";
+                    if (!replacement || replacement.trim() === "") {
+                        // generate heuristic content based on placeholder type
+                        if (ph === '[AI_SUMMARY]') replacement = makeHeuristicSummary(profile, jd);
+                        else if (ph === '[AI_SKILLS]') replacement = makeHeuristicSkills(profile, jd);
+                        else if (/^\[AI_BULLETS_FOR_/.test(ph)) {
+                            const roleKey = ph.replace(/\[AI_BULLETS_FOR_(.+)\]/, '$1');
+                            replacement = makeHeuristicBulletsForRole(profile, roleKey, jd);
+                        }
+                    }
+                    htmlSkeleton = htmlSkeleton.split(ph).join(replacement);
                 }
             });
 
