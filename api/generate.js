@@ -261,10 +261,11 @@ module.exports = async (req, res) => {
             }
             
             // --- CRITICAL FIX: Loop through REQUESTED placeholders, not received keys ---
+            const placeholdersFilled = {};
             Object.keys(placeholders).forEach(ph => {
                 // Attempt 1: Exact Match
                 let val = aiData[ph];
-                
+
                 // Attempt 2: Match without brackets (common AI mistake)
                 if (!val) {
                     const cleanKey = ph.replace(/[\[\]]/g, ''); // AI_SUMMARY
@@ -274,6 +275,7 @@ module.exports = async (req, res) => {
                 if (val) {
                     // Success: Use AI content
                     htmlSkeleton = htmlSkeleton.split(ph).join(val);
+                    placeholdersFilled[ph] = 'ai';
                 } else {
                     // Fail: Revert to Original content (Fallback) or heuristics
                     let replacement = fallbackContent[ph] || "";
@@ -287,8 +289,12 @@ module.exports = async (req, res) => {
                         }
                     }
                     htmlSkeleton = htmlSkeleton.split(ph).join(replacement);
+                    placeholdersFilled[ph] = 'fallback';
                 }
             });
+
+            // Final cleanup: remove any leftover unresolved placeholders
+            htmlSkeleton = htmlSkeleton.replace(/\[AI_[^\]]+\]/g, '');
 
         } catch (e) {
             console.error("AI Generation Error", e);
@@ -296,15 +302,20 @@ module.exports = async (req, res) => {
             Object.keys(placeholders).forEach(ph => {
                 htmlSkeleton = htmlSkeleton.split(ph).join(fallbackContent[ph] || "");
             });
+            // Cleanup
+            htmlSkeleton = htmlSkeleton.replace(/\[AI_[^\]]+\]/g, '');
+            const placeholdersFilled = Object.keys(placeholders).reduce((acc,k)=>{acc[k]='error';return acc;},{})
         }
     } else {
         // No AI needed, cleanup placeholders (if any existed for some reason)
         Object.keys(placeholders).forEach(ph => {
              htmlSkeleton = htmlSkeleton.split(ph).join(fallbackContent[ph] || "");
         });
+        htmlSkeleton = htmlSkeleton.replace(/\[AI_[^\]]+\]/g, '');
     }
 
-    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton } });
+    // Return debug info about placeholders and scope so client can verify
+    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug: { scope: scope || [], placeholders: placeholders, placeholdersFilled: placeholdersFilled } });
 
   } catch (err) {
     console.error(err);
