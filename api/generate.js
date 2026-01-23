@@ -61,7 +61,7 @@ async function callGeminiFlash(promptText) {
     generationConfig: {
       temperature: 0.4,
       maxOutputTokens: 2048,
-      responseMimeType: "application/json" // Force JSON response
+      responseMimeType: "application/json"
     }
   };
 
@@ -84,7 +84,6 @@ async function callGeminiFlash(promptText) {
 }
 
 module.exports = async (req, res) => {
-  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -94,66 +93,66 @@ module.exports = async (req, res) => {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
     const { profile, jd, nickname, scope = [] } = body;
 
-    // Helper to check if user checked a box
     const isScopeSelected = (key) => scope.some(s => s.toLowerCase().includes(key.toLowerCase()));
 
-    // 1. Build Static HTML Parts (Name, Contact, Education)
+    // 1. Static Header
     const name = (profile.fullName || nickname || "User").toUpperCase();
-    const email = profile.email || "";
-    const phone = profile.phone || "";
-    const linkedin = profile.linkedin || "";
-    const github = profile.github || "";
-    
     const contactLinks = [
-      email ? `<a href="mailto:${email}">${email}</a>` : null,
-      phone,
-      linkedin ? `<a href="${linkedin}">LinkedIn</a>` : null,
-      github ? `<a href="${github}">GitHub</a>` : null,
+      profile.email ? `<a href="mailto:${profile.email}">${profile.email}</a>` : null,
+      profile.phone,
+      profile.linkedin ? `<a href="${profile.linkedin}">LinkedIn</a>` : null,
+      profile.github ? `<a href="${profile.github}">GitHub</a>` : null,
     ].filter(Boolean).join(" | ");
 
-    // 2. Logic: Do we ask AI or use existing data?
-    const placeholders = {}; // Store what we need AI to generate
+    // 2. Logic: Prepare Placeholders & Fallbacks
+    const placeholders = {}; 
+    const fallbackContent = {}; // Stores original text to use if AI fails
 
     // --- SUMMARY ---
     let summaryHtml = "";
+    const originalSummary = profile.summary ? `<p>${escapeHtml(profile.summary)}</p>` : "";
+    
     if (isScopeSelected('Summary')) {
         summaryHtml = "[AI_SUMMARY]";
-        placeholders["[AI_SUMMARY]"] = "Write a 3-sentence professional summary tailored to the Job Description.";
+        placeholders["[AI_SUMMARY]"] = "Write a 3-sentence professional summary tailored to the JD.";
+        fallbackContent["[AI_SUMMARY]"] = originalSummary;
     } else {
-        summaryHtml = `<p>${escapeHtml(profile.summary || '')}</p>`;
+        summaryHtml = originalSummary;
     }
 
     // --- SKILLS ---
     let skillsHtml = "";
+    const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
+    const originalSkills = userSkills.length ? `<ul>${userSkills.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : "";
+    
     if (isScopeSelected('Skills')) {
         skillsHtml = "[AI_SKILLS]";
-        placeholders["[AI_SKILLS]"] = "Write a list of technical skills from the profile that match the Job Description. Format as: <ul><li>Skill 1</li><li>Skill 2</li></ul>";
+        placeholders["[AI_SKILLS]"] = "Write a list of technical skills from the profile that match the JD. Format as HTML <ul><li>Skill</li>...</ul>";
+        fallbackContent["[AI_SKILLS]"] = originalSkills;
     } else {
-        const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
-        if (userSkills.length) {
-            skillsHtml = `<ul>${userSkills.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`;
-        }
+        skillsHtml = originalSkills;
     }
 
     // --- EXPERIENCE ---
-    // This is the tricky part. We keep the Titles static, but generate bullets.
     const experienceSection = (profile.customSections || [])
       .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')))
       .map(sec => {
         return (sec.items || []).map(item => {
-            const roleKey = slugify(item.key); // e.g., 'data-analyst'
+            const roleKey = slugify(item.key);
             const placeholderKey = `[AI_BULLETS_FOR_${roleKey}]`;
             
+            let originalBullets = "";
+            if (Array.isArray(item.bullets) && item.bullets.length) {
+                originalBullets = item.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('');
+            }
+
             let bulletContent = "";
             if (isScopeSelected('Experience') || isScopeSelected('Work')) {
-                // User wants AI to fix this
                 bulletContent = placeholderKey;
                 placeholders[placeholderKey] = `Write 3 impactful bullet points for the role '${item.key}' at '${sec.title}'. Use metrics. Tailor to JD. Return valid HTML <li>...</li> tags.`;
+                fallbackContent[placeholderKey] = originalBullets;
             } else {
-                // User wants their original text
-                if (Array.isArray(item.bullets) && item.bullets.length) {
-                    bulletContent = item.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('');
-                }
+                bulletContent = originalBullets;
             }
 
             return `
@@ -163,91 +162,90 @@ module.exports = async (req, res) => {
                   <span class="resume-date">${escapeHtml(item.date || '')}</span>
                 </div>
                 <span class="resume-company">${escapeHtml(sec.title)}</span>
-                <ul>
-                   ${bulletContent}
-                </ul>
+                <ul>${bulletContent}</ul>
               </div>`;
         }).join('');
       }).join('');
 
-    // --- BUILD THE SKELETON ---
+    // --- BUILD SKELETON ---
     let htmlSkeleton = `
     <div class="generated-resume">
       ${RESUME_CSS}
-      
       <div class="resume-header">
         <div class="resume-name">${escapeHtml(name)}</div>
         <div class="resume-contact">${contactLinks}</div>
       </div>
-
       <div class="resume-section-title">Summary</div>
       <div class="resume-item">${summaryHtml}</div>
-
       <div class="resume-section-title">Technical Skills</div>
       <div class="resume-item">${skillsHtml}</div>
-
       <div class="resume-section-title">Experience</div>
       ${experienceSection}
-      
       <div class="resume-section-title">Education</div>
       <div class="resume-item">
          ${(profile.education || []).map(e => `<div>${escapeHtml(e)}</div>`).join('')}
       </div>
     </div>`;
 
-    // 3. CALL AI (Only if we have placeholders)
+    // 3. CALL AI
     if (Object.keys(placeholders).length > 0 && jd) {
         const prompt = `
-        You are an expert Resume Writer.
-        
-        JOB DESCRIPTION:
-        ${jd.slice(0, 3000)}
+        JOB DESCRIPTION: ${jd.slice(0, 3000)}
+        USER PROFILE: ${JSON.stringify(profile).slice(0, 5000)}
 
-        USER PROFILE DATA:
-        ${JSON.stringify(profile).slice(0, 5000)}
-
-        TASK:
-        I need you to generate HTML content for the following specific placeholders.
-        
-        INSTRUCTIONS:
+        TASK: Generate HTML content for these keys.
         ${Object.entries(placeholders).map(([key, instr]) => `- "${key}": ${instr}`).join('\n')}
         
-        OUTPUT FORMAT:
-        Return ONLY a JSON object. Keys must be exactly the placeholders listed above.
-        Example: { "[AI_SUMMARY]": "<p>...</p>", "[AI_BULLETS_FOR_...]": "<li>Result A</li><li>Result B</li>" }
+        OUTPUT: JSON object with keys matching above exactly.
+        Example: { "[AI_SUMMARY]": "<p>Content...</p>" }
         `;
 
         try {
             const aiJsonText = await callGeminiFlash(prompt);
-            // Parse AI response
             let aiData = {};
             try {
-                aiData = JSON.parse(aiJsonText);
+                // Remove Markdown if present
+                const cleanJson = aiJsonText.replace(/```json|```/g, '').trim();
+                aiData = JSON.parse(cleanJson);
             } catch (e) {
-                // Sometimes AI returns markdown like \`\`\`json ... \`\`\`
-                const clean = aiJsonText.replace(/```json|```/g, '').trim();
-                aiData = JSON.parse(clean);
+                console.error("JSON Parse Error", e);
             }
             
-            // Replace placeholders in skeleton
-            Object.keys(aiData).forEach(key => {
-                // Use split/join for global replacement without regex issues
-                htmlSkeleton = htmlSkeleton.split(key).join(aiData[key]);
+            // --- CRITICAL FIX: Loop through REQUESTED placeholders, not received keys ---
+            Object.keys(placeholders).forEach(ph => {
+                // Attempt 1: Exact Match
+                let val = aiData[ph];
+                
+                // Attempt 2: Match without brackets (common AI mistake)
+                if (!val) {
+                    const cleanKey = ph.replace(/[\[\]]/g, ''); // AI_SUMMARY
+                    val = aiData[cleanKey];
+                }
+
+                if (val) {
+                    // Success: Use AI content
+                    htmlSkeleton = htmlSkeleton.split(ph).join(val);
+                } else {
+                    // Fail: Revert to Original content (Fallback)
+                    // This prevents [AI_SKILLS] from staying on screen
+                    htmlSkeleton = htmlSkeleton.split(ph).join(fallbackContent[ph] || "");
+                }
             });
 
         } catch (e) {
             console.error("AI Generation Error", e);
-            // If AI fails, we must remove the placeholders so the user doesn't see "[AI_...]"
-            Object.keys(placeholders).forEach(key => {
-                htmlSkeleton = htmlSkeleton.split(key).join("");
+            // GLOBAL FAIL: Revert EVERYTHING to original content
+            Object.keys(placeholders).forEach(ph => {
+                htmlSkeleton = htmlSkeleton.split(ph).join(fallbackContent[ph] || "");
             });
         }
     } else {
-        // If no AI needed (scope empty), just clean up any leftover placeholders
-        // (Though logically there shouldn't be any)
+        // No AI needed, cleanup placeholders (if any existed for some reason)
+        Object.keys(placeholders).forEach(ph => {
+             htmlSkeleton = htmlSkeleton.split(ph).join(fallbackContent[ph] || "");
+        });
     }
 
-    // 4. Return Final HTML
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton } });
 
   } catch (err) {
