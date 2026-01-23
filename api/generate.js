@@ -50,67 +50,90 @@ async function callGcpGenerate(promptText, maxTokens = 1024) {
 
 function buildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic', safeScope = [], nickname) {
   const displayName = (profile && profile.fullName) || nickname || 'User';
+  const contacts = [];
+  if (profile.phone) contacts.push(escapeHtml(profile.phone));
+  if (profile.email) contacts.push(escapeHtml(profile.email));
+  if (profile.linkedin) contacts.push(`<a href="${escapeHtml(profile.linkedin)}" target="_blank">LinkedIn</a>`);
+  const headerHtml = `<div class="profile-header"><h1>${escapeHtml(displayName)}</h1>${contacts.length?`<div class="profile-contact">${contacts.join(' | ')}</div>`:''}</div>`;
+
   const jdSnippet = escapeHtml((jd || '').slice(0, 400));
-  const sectionsToRender = (Array.isArray(safeScope) && safeScope.length) ? safeScope : ['Summary', 'Skills', 'Experience'];
+
+  // Determine ordered sections to render based on requested scope or defaults
+  const order = ['Summary','Skills','Education','Work Experience','Projects','Certifications','Achievements','Character Traits'];
+  const wanted = (Array.isArray(safeScope) && safeScope.length) ? order.filter(o => safeScope.map(s=>String(s).toLowerCase()).includes(o.toLowerCase())) : order;
+
   const pieces = [];
+  pieces.push(`<div class="generated-resume">${headerHtml}`);
 
-  pieces.push(`<div class="generated-resume"><h2>Generated resume for ${escapeHtml(displayName)}</h2><p>Mode: ${escapeHtml(mode)}, Template: ${escapeHtml(template)}</p>`);
+  // Helper to push section once
+  function pushSection(title, innerHtml) {
+    if (!innerHtml) return;
+    pieces.push(`<section class="sec-${slugify(title)}"><h3>${escapeHtml(title)}</h3>${innerHtml}</section>`);
+  }
 
-  for (const sec of sectionsToRender) {
-    const s = String(sec || '').trim();
-    const key = s.toLowerCase();
+  // Summary
+  if (wanted.includes('Summary')) {
+    const txt = profile.summary ? escapeHtml(profile.summary) : '';
+    pushSection('Summary', txt ? `<p>${txt}</p>` : '');
+  }
 
-    if (key === 'summary') {
-      const txt = (profile && profile.summary) ? escapeHtml(profile.summary) : '';
-      if (txt) pieces.push(`<section class="sec-summary"><h3>Summary</h3><p>${txt}</p></section>`);
-    } else if (key === 'skills' || key === 'technical skills') {
-      const skills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(/\r?\n/) : []);
-      if (skills && skills.length) {
-        pieces.push('<section class="sec-skills"><h3>Skills</h3><ul>');
-        for (const sk of skills) pieces.push(`<li>${escapeHtml(String(sk))}</li>`);
-        pieces.push('</ul></section>');
-      }
-    } else if (key === 'experience' || key.includes('work') || key.includes('project')) {
-      const secs = Array.isArray(profile.customSections) ? profile.customSections.filter(s => s && (String(s.type||'')==='entries' || (String(s.title||'').toLowerCase().includes('work') || String(s.title||'').toLowerCase().includes('project')))) : [];
-      if (secs.length) {
-        for (const sg of secs) {
-          const title = escapeHtml(sg.title || 'Experience');
-          // slugify is now guaranteed to exist
-          pieces.push(`<section class="sec-${slugify(title)}"><h3>${title}</h3>`);
-          for (const it of (sg.items || [])) {
-            const heading = escapeHtml(it.key || '');
-            pieces.push(`<div class="entry"><strong>${heading}</strong>`);
-            if (Array.isArray(it.bullets) && it.bullets.length) {
-              pieces.push('<ul>');
-              for (const b of it.bullets) pieces.push(`<li>${escapeHtml(b)}</li>`);
-              pieces.push('</ul>');
-            }
-            pieces.push('</div>');
-          }
-          pieces.push('</section>');
-        }
-      }
-    } else {
-      const match = (Array.isArray(profile.customSections) ? profile.customSections : []).find(sc => String(sc.title||'').trim().toLowerCase() === key);
-      if (match) {
-        pieces.push(`<section class="sec-${slugify(match.title)}"><h3>${escapeHtml(match.title)}</h3>`);
-        if (match.type === 'entries') {
-          for (const it of (match.items || [])) {
-            pieces.push(`<div class="entry"><strong>${escapeHtml(it.key||'')}</strong>`);
-            if (Array.isArray(it.bullets) && it.bullets.length) { pieces.push('<ul>'); for (const b of it.bullets) pieces.push(`<li>${escapeHtml(b)}</li>`); pieces.push('</ul>'); }
-            pieces.push('</div>');
-          }
-        } else {
-          pieces.push('<ul>'); for (const it of (match.items || [])) pieces.push(`<li>${escapeHtml(String(it||''))}</li>`); pieces.push('</ul>');
-        }
-        pieces.push('</section>');
+  // Skills
+  if (wanted.includes('Skills')) {
+    const skills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(/\r?\n/) : []);
+    if (skills && skills.length) {
+      const items = skills.map(s=>`<li>${escapeHtml(s)}</li>`).join('\n');
+      pushSection('Skills', `<ul>${items}</ul>`);
+    }
+  }
+
+  // Education
+  if (wanted.includes('Education')) {
+    const edu = Array.isArray(profile.education) ? profile.education : (profile.college ? [profile.college] : []);
+    if (edu && edu.length) {
+      const items = edu.map(e=>`<div>${escapeHtml(String(e))}</div>`).join('\n');
+      pushSection('Education', items);
+    }
+  }
+
+  // Work Experience and Projects — entries-style
+  if (wanted.includes('Work Experience') || wanted.includes('Projects')) {
+    const entries = Array.isArray(profile.customSections) ? profile.customSections.filter(s=>s && String(s.type||'')==='entries') : [];
+    // filter entries for work/project titles if specific
+    let relevant = entries;
+    if (wanted.includes('Work Experience') && !wanted.includes('Projects')) {
+      relevant = entries.filter(e => String(e.title||'').toLowerCase().includes('work') || String(e.title||'').toLowerCase().includes('experience'));
+    }
+    if (relevant.length) {
+      for (const sec of relevant) {
+        const title = sec.title || 'Experience';
+        const inner = (sec.items||[]).map(it=>{
+          const bullets = Array.isArray(it.bullets) ? it.bullets.map(b=>`<li>${escapeHtml(b)}</li>`).join('\n') : '';
+          return `<div class="entry"><strong>${escapeHtml(it.key||'')}</strong>${bullets?`<ul>${bullets}</ul>`:''}</div>`;
+        }).join('\n');
+        pushSection(title, inner);
       }
     }
   }
 
-  if (jdSnippet) {
-    pieces.push(`<section class="sec-role"><h3>Target role</h3><pre>${jdSnippet}</pre></section>`);
+  // Generic custom sections: Certifications, Achievements, Character Traits
+  const cs = Array.isArray(profile.customSections) ? profile.customSections : [];
+  for (const name of ['Certifications','Achievements','Character Traits']) {
+    if (!wanted.includes(name)) continue;
+    const match = cs.find(c => String(c.title||'').trim().toLowerCase().includes(name.toLowerCase().split(' ')[0]));
+    if (match) {
+      if (match.type === 'entries') {
+        const inner = (match.items||[]).map(it=>`<div><strong>${escapeHtml(it.key||'')}</strong>${Array.isArray(it.bullets)&&it.bullets.length?`<ul>${it.bullets.map(b=>`<li>${escapeHtml(b)}</li>`).join('\n')}</ul>`:''}</div>`).join('\n');
+        pushSection(match.title, inner);
+      } else {
+        const inner = (match.items||[]).map(i=>`<li>${escapeHtml(String(i||''))}</li>`).join('\n');
+        pushSection(match.title, inner ? `<ul>${inner}</ul>` : '');
+      }
+    }
   }
+
+  // Target role
+  if (jdSnippet) pushSection('Target role', `<pre>${jdSnippet}</pre>`);
+
   pieces.push('</div>');
   return { html: pieces.join('\n'), text: `Generated resume (fallback) for ${displayName}` };
 }
@@ -150,8 +173,11 @@ module.exports = async (req, res) => {
     promptLines.push("1) Output only valid HTML markup for the resume content — no explanations or commentary.");
     promptLines.push("2) Wrap the entire resume in a single <div class=\"generated-resume\">...</div>.");
     promptLines.push("3) Use semantic headings and lists where appropriate. Keep styling minimal and inline-free.");
-    promptLines.push("4) Include only sections selected in the 'scope' array or those that have content in the profile.");
-    promptLines.push("5) Do not include any API keys, tokens, or sensitive data in the output.");
+    promptLines.push("4) Do NOT include any top-level header like 'Generated resume for ...' or 'Mode: ...'.");
+    promptLines.push("5) Follow this exact section order where present: header (name + contacts), Summary (1–3 sentences), Technical Skills (bulleted list) / Skills, Education, Work Experience (entries with bullets), Projects (entries), Certifications, Achievements, Character Traits.");
+    promptLines.push("6) Only include sections that are present in the profile or are explicitly listed in the scope array. Do not repeat sections.");
+    promptLines.push("7) Use bullets for lists (ul/li). Use concise sentences for Summary. For experience entries use a bold heading and a ul of bullet points.");
+    promptLines.push("8) Do not include API keys, tokens, or sensitive data in the output.");
     promptLines.push("");
     promptLines.push(`Job description:\n${jd.trim().slice(0,4000)}`);
     promptLines.push("");
