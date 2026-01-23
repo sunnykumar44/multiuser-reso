@@ -692,29 +692,50 @@ async function callGenerateAPI(payload) {
 
       setStatus('Generating via server...');
       const result = await callGenerateAPI({ profile: currentProfile, jd: jdNow, mode, template, scope, nickname: effectiveNickname });
-      
-      if (result && result.generated && result.generated.html) {
-        // --- START OF NEW LOGIC ---
-        // 1. Get the HTML from the server (which now includes styles and full structure)
-        const finalHtml = result.generated.html;
 
-        // 2. Save to draft override
-        draft.htmlOverride = finalHtml;
+      // Support multiple server response shapes: { generated: { html } }, { resume }, or legacy
+      let serverHtml = null;
+      let serverText = null;
+      try {
+        if (!result) throw new Error('Empty server response');
+        if (result.generated && result.generated.html) {
+          serverHtml = result.generated.html;
+          serverText = result.generated.text || '';
+        } else if (result.resume) {
+          serverHtml = result.resume;
+          serverText = result.text || '';
+        } else if (result.html) {
+          serverHtml = result.html;
+          serverText = result.text || '';
+        } else if (result.generatedHtml) {
+          serverHtml = result.generatedHtml;
+        } else if (result.page) {
+          serverHtml = result.page; // some fallbacks used 'page'
+        }
+      } catch (e) {
+        console.warn('Unable to parse server response', e, result);
+      }
+
+      if (serverHtml) {
+        // Persist returned HTML into draft and render
+        draft.htmlOverride = String(serverHtml || '');
         saveDraft(draft);
 
-        // 3. Render it directly into the paper element
+        // Render directly into the preview
         if (paperEl) {
-          paperEl.innerHTML = finalHtml;
-          
-          // 4. Make it editable so user can tweak the AI text
-          // Using a broad selector to catch most text elements
-          paperEl.querySelectorAll('p, li, div, span, h1, h2, h3').forEach(el => {
-             el.contentEditable = true; 
-          });
+          try {
+            paperEl.innerHTML = draft.htmlOverride;
+            // make editable
+            paperEl.querySelectorAll('p, li, div, span, h1, h2, h3').forEach(el => { el.contentEditable = true; });
+          } catch (e) {
+            // fallback
+            paperEl.innerHTML = draft.htmlOverride;
+          }
         }
-        
-        setStatus('Resume generated successfully!', 'ok');
-        // --- END OF NEW LOGIC ---
+
+        updateEditBadge();
+        setStatus('Generated (server)', 'ok');
+        showToast('Generated', 'success', 1600);
 
         if (typeof History !== 'undefined' && History.addHistoryItem) {
           try {
@@ -725,14 +746,30 @@ async function callGenerateAPI(payload) {
               jdPreview: jdNow.slice(0, 140),
               mode,
               template,
-              htmlSnapshot: result.generated.html,
+              htmlSnapshot: serverHtml,
             });
             if (History.render) History.render();
           } catch (hErr) { console.warn('history add failed', hErr); }
         }
       } else {
-        setStatus('No generated result', 'err');
-        showToast('No result from server', 'err');
+        // No usable server HTML — log and fall back to client-side builder
+        console.warn('Server returned no HTML. Response:', result);
+        setStatus('Server returned no usable HTML; using local fallback', 'err');
+        showToast('Using local fallback', 'warn');
+
+        try {
+          const fallbackHtml = clientBuildFallback(currentProfile, jdNow, mode, template, scope, effectiveNickname);
+          draft.htmlOverride = fallbackHtml;
+          saveDraft(draft);
+          if (paperEl) paperEl.innerHTML = draft.htmlOverride;
+          // make editable
+          if (paperEl) paperEl.querySelectorAll('p, li, div, span, h1, h2, h3').forEach(el => { el.contentEditable = true; });
+          updateEditBadge();
+        } catch (fbErr) {
+          console.error('Fallback render failed', fbErr);
+          setStatus('Failed to render resume', 'err');
+          showToast('Render failed', 'err');
+        }
       }
     } catch (err) {
       console.error('Generate click error:', err);
