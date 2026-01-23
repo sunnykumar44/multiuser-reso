@@ -35,6 +35,7 @@ const RESUME_CSS = `
     .resume-company { font-style: italic; color: #444; margin-bottom: 2px; display: block; }
     .generated-resume ul { margin-left: 18px; margin-top: 4px; padding: 0; }
     .generated-resume li { margin-bottom: 3px; font-size: 11px; }
+    .generated-resume p { margin-bottom: 4px; font-size: 11px; }
   </style>
 `;
 
@@ -46,7 +47,7 @@ async function callGeminiFlash(promptText) {
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
-      temperature: 0.5,
+      temperature: 0.6, // Increased creativity for filling gaps
       maxOutputTokens: 3000,
       responseMimeType: "application/json"
     }
@@ -80,7 +81,7 @@ module.exports = async (req, res) => {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
     const { profile, jd, nickname, scope = [] } = body;
 
-    // 1. Static Header
+    // 1. Static Header (Always accurate)
     const name = (profile.fullName || nickname || "User").toUpperCase();
     const contactLinks = [
       profile.email ? `<a href="mailto:${profile.email}">${profile.email}</a>` : null,
@@ -91,19 +92,16 @@ module.exports = async (req, res) => {
 
     let resumeBodyHtml = "";
     
-    // We will collect instructions for AI here
-    // key: "section_id", value: "Instructions"
+    // We store instructions here: { "sec_1": "Write 3 bullets..." }
     const aiPrompts = {}; 
     const aiFallbacks = {};
+    let sectionCounter = 0;
 
-    // 2. Iterate through SCOPE to build the resume structure
-    // This ensures that if "Certifications" is ticked, it APPEARS.
-    // Default order if scope is empty:
+    // 2. Build Sections based on SCOPE (User Selection)
+    // Default to standard sections if scope is missing
     const sectionsToRender = (scope && scope.length > 0) 
       ? scope 
       : ['Summary', 'Skills', 'Experience', 'Education'];
-
-    let sectionCounter = 0;
 
     for (const sectionName of sectionsToRender) {
         const key = sectionName.trim();
@@ -112,30 +110,36 @@ module.exports = async (req, res) => {
         // --- HEADER ---
         resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(key)}</div>`;
         
-        // --- CONTENT LOGIC ---
-        
-        // A. SUMMARY
+        // --- A. SUMMARY ---
         if (lowerKey === 'summary') {
             const pid = `sec_${sectionCounter++}`;
-            const original = profile.summary ? `<p>${escapeHtml(profile.summary)}</p>` : "";
+            const original = profile.summary || "";
             
+            // Placeholder in HTML
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = "Write a 3-sentence professional summary tailored to the JD.";
-            aiFallbacks[pid] = original || "<p><i>(AI failed to generate summary)</i></p>";
+            
+            // Instruction to AI
+            if (original.length < 10) {
+               aiPrompts[pid] = `Write a professional 3-sentence Summary for a '${jd.slice(0,50)}' role. The user only provided: "${original}". Expand this into a full professional summary.`;
+            } else {
+               aiPrompts[pid] = `Rewrite this summary for ATS optimization: "${original}". Keep it to 3 sentences.`;
+            }
+            aiFallbacks[pid] = `<p>${escapeHtml(original)}</p>`;
         }
         
-        // B. SKILLS
+        // --- B. SKILLS ---
         else if (lowerKey.includes('skills')) {
             const pid = `sec_${sectionCounter++}`;
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
-            const original = userSkills.length ? `<ul>${userSkills.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : "";
-
+            
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = "Write a list of technical skills from profile matching JD. Return HTML <ul><li>Skill</li></ul>.";
-            aiFallbacks[pid] = original || "<ul><li><i>(Add skills)</i></li></ul>";
+            
+            aiPrompts[pid] = `List 8-10 technical skills relevant to '${jd.slice(0,50)}'. User's current skills: ${JSON.stringify(userSkills)}. If user list is short, ADD relevant skills based on the Job Description. Return HTML: <ul><li>Skill</li>...</ul>`;
+            
+            aiFallbacks[pid] = userSkills.length ? `<ul>${userSkills.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : "";
         }
         
-        // C. EXPERIENCE / WORK
+        // --- C. EXPERIENCE ---
         else if (lowerKey.includes('experience') || lowerKey.includes('work')) {
             const experienceSections = (profile.customSections || [])
                .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')));
@@ -146,7 +150,6 @@ module.exports = async (req, res) => {
                         const pid = `sec_${sectionCounter++}`;
                         const originalBullets = (Array.isArray(item.bullets) && item.bullets.length) ? item.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('') : "";
                         
-                        // Render structure immediately, put placeholder in the UL
                         resumeBodyHtml += `
                           <div class="resume-item">
                             <div class="resume-row">
@@ -157,20 +160,21 @@ module.exports = async (req, res) => {
                             <ul id="${pid}">[${pid}]</ul>
                           </div>`;
                         
-                        aiPrompts[pid] = `Write 3 strong bullet points for role '${item.key}'. Metrics & JD keywords. Return HTML <li>...</li> tags.`;
-                        aiFallbacks[pid] = originalBullets || `<li>${escapeHtml(item.key)} - (Add details)</li>`;
+                        aiPrompts[pid] = `Write 3 strong, metric-driven bullet points for the role '${item.key}'. User provided: "${item.bullets}". REWRITE these to be professional and impactful for a '${jd.slice(0,50)}' job. Return valid HTML <li>...</li> tags only.`;
+                        
+                        aiFallbacks[pid] = originalBullets || `<li>${escapeHtml(item.key)}</li>`;
                     }
                 }
             } else {
-                // User asked for Experience but has none in profile?
+                // User asked for Experience but has none? Invent a placeholder project.
                 const pid = `sec_${sectionCounter++}`;
                 resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-                aiPrompts[pid] = "User has no experience listed. Suggest 2 generic relevant project bullets based on JD.";
+                aiPrompts[pid] = `User has no experience listed. Generate 2 generic but realistic bullet points for a 'Personal Project' relevant to '${jd.slice(0,50)}'. Format: HTML <ul><li>...</li></ul>`;
                 aiFallbacks[pid] = "<p><i>(No experience data found)</i></p>";
             }
         }
         
-        // D. EDUCATION (Usually Static)
+        // --- D. EDUCATION (Static) ---
         else if (lowerKey.includes('education')) {
              const eduList = (profile.education && profile.education.length) 
                 ? profile.education 
@@ -185,23 +189,24 @@ module.exports = async (req, res) => {
              resumeBodyHtml += `</div>`;
         }
         
-        // E. GENERIC / NEW SECTIONS (Certifications, Achievements)
+        // --- E. NEW SECTIONS (Certifications, Achievements, etc.) ---
         else {
             const pid = `sec_${sectionCounter++}`;
             
-            // Check if profile has data for this
+            // Check if profile has data
             const existingSec = (profile.customSections || []).find(s => s.title.toLowerCase().trim() === lowerKey);
-            let context = "User has no data. Invent realistic placeholders based on JD.";
-            let fallback = "<p><i>(New section - Add details)</i></p>";
-
-            if (existingSec) {
-                context = `Refine this data: ${JSON.stringify(existingSec)}.`;
-                fallback = JSON.stringify(existingSec.items || []);
-            }
-
+            
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `Write content for section '${key}'. ${context} Format as HTML list or paragraph.`;
-            aiFallbacks[pid] = fallback;
+            
+            if (existingSec) {
+                // Improve existing data
+                aiPrompts[pid] = `Refine this content for section '${key}': ${JSON.stringify(existingSec)}. Format as HTML list.`;
+                aiFallbacks[pid] = JSON.stringify(existingSec);
+            } else {
+                // INVENT DATA (This solves your "New Section" issue)
+                aiPrompts[pid] = `User selected '${key}' but provided no data. Generate 2 realistic, professional examples of ${key} for a '${jd.slice(0,50)}' candidate. Return HTML <ul><li>...</li></ul>.`;
+                aiFallbacks[pid] = "<p><i>(AI could not generate this section)</i></p>";
+            }
         }
     }
 
@@ -219,11 +224,10 @@ module.exports = async (req, res) => {
     // 4. CALL AI
     if (Object.keys(aiPrompts).length > 0 && jd) {
         const prompt = `
-        JOB: ${jd.slice(0, 1000)}
-        PROFILE: ${JSON.stringify(profile).slice(0, 2000)}
+        JOB DESCRIPTION: ${jd.slice(0, 1000)}
         
-        TASK: Return JSON object. Keys: ${Object.keys(aiPrompts).join(', ')}.
-        Values: HTML content per instruction.
+        TASK: You are a Resume Builder. Return a JSON object where keys are exactly: ${Object.keys(aiPrompts).join(', ')}.
+        Values must be the HTML content requested.
         
         INSTRUCTIONS:
         ${Object.entries(aiPrompts).map(([k, v]) => `${k}: ${v}`).join('\n')}
@@ -238,8 +242,8 @@ module.exports = async (req, res) => {
 
             Object.keys(aiPrompts).forEach(pid => {
                 const val = aiData[pid];
-                // Replace the [sec_0] placeholder
-                if (val && val.length > 5) {
+                // Replace placeholder if valid content returned
+                if (val && typeof val === 'string' && val.length > 5) {
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, val);
                 } else {
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
