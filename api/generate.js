@@ -2,141 +2,71 @@ const { saveHistory } = require("./firebase");
 
 // --- HELPER FUNCTIONS ---
 function escapeHtml(s = "") {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function safeLower(s) {
-  return String(s || "").trim().toLowerCase();
+function slugify(s) {
+  return String(s || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '');
 }
 
-function canonicalSectionName(name) {
-  const s = safeLower(name);
-
-  // Treat these as the same section
-  if (s.includes("work experience")) return "experience";
-  if (s === "work") return "experience";
-  if (s.includes("experience")) return "experience";
-
-  // Common aliases
-  if (s.includes("technical skills")) return "skills";
-  if (s.includes("skill")) return "skills";
-
-  if (s.includes("character")) return "character traits";
-  if (s.includes("trait")) return "character traits";
-
-  if (s.includes("certification")) return "certifications";
-  if (s.includes("achievement")) return "achievements";
-
-  return s;
-}
-
-function dedupeScope(scopeArr) {
-  const seen = new Set();
-  const out = [];
-  for (const sec of (Array.isArray(scopeArr) ? scopeArr : [])) {
-    const canon = canonicalSectionName(sec);
-    if (!canon) continue;
-    if (seen.has(canon)) continue;
-    seen.add(canon);
-    out.push(sec);
-  }
-  return out;
-}
-
-// Invent content when user has no data (NEVER output "could not generate")
+// 1. INVENTED DEFAULTS (Fixes "AI could not generate this section")
 function inventedFallbackForSection(title, jd) {
-  const t = canonicalSectionName(title);
-  const jdLower = safeLower(jd);
-
-  if (t === "certifications") {
-    // Reasonable defaults for tech roles (esp Python dev)
+  const t = String(title || "").trim().toLowerCase();
+  
+  if (t.includes("certification")) {
     return `<ul>
-      <li>AWS Certified Developer – Associate</li>
+      <li>AWS Certified Developer – Associate (Invented Example)</li>
       <li>PCEP – Certified Entry-Level Python Programmer</li>
       <li>Google IT Automation with Python</li>
     </ul>`;
   }
-
-  if (t === "achievements") {
+  if (t.includes("achievement")) {
     return `<ul>
-      <li>Improved workflow efficiency by 20% by automating repetitive tasks and reporting.</li>
-      <li>Delivered a key feature ahead of schedule while maintaining code quality and test coverage.</li>
-      <li>Reduced manual errors by introducing validation and monitoring checks.</li>
+      <li>Reduced API latency by 30% through caching optimizations.</li>
+      <li>Awarded 'Employee of the Month' for delivering critical module ahead of schedule.</li>
     </ul>`;
   }
-
-  if (t === "character traits") {
-    return `<ul>
-      <li>Ownership mindset</li>
-      <li>Clear communicator</li>
-      <li>Fast learner</li>
-      <li>Detail-oriented</li>
-      <li>Team-first attitude</li>
-    </ul>`;
+  if (t.includes("character") || t.includes("trait")) {
+    return `<ul><li>Ownership Mindset</li><li>Fast Learner</li><li>Team Player</li><li>Problem Solver</li></ul>`;
   }
-
-  if (t === "experience") {
-    // If user has no experience data, generate personal-project-style bullets
-    // Keep it broad but aligned to JD
-    const roleHint = jdLower.includes("python") ? "Python" : "software";
-    return `<ul>
-      <li>Built a ${roleHint}-based project demonstrating clean architecture, reusable modules, and error handling.</li>
-      <li>Integrated APIs and implemented basic authentication, validation, and logging for maintainability.</li>
-      <li>Used Git for version control and documented setup, usage, and key design decisions.</li>
-    </ul>`;
+  if (t.includes("summary")) {
+    return `<p>Results-oriented Developer with experience in building scalable web applications. Skilled in backend optimization and cloud deployment. Committed to delivering high-quality code and driving business success.</p>`;
   }
-
-  if (t === "skills") {
-    // Always chips, never "(Add skills)"
-    const base = jdLower.includes("python")
-      ? ["Python", "SQL", "Git", "REST APIs", "Flask/FastAPI", "Pandas", "Unit Testing", "Linux"]
-      : ["Communication", "Problem Solving", "Teamwork", "Time Management"];
-    return base.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join("");
-  }
-
-  // Generic fallback for any other selected section
+  // Generic
   return `<ul>
-    <li>Relevant experience and strengths aligned with the job description.</li>
-    <li>Demonstrates practical capability, consistency, and initiative.</li>
+    <li>Demonstrated ability to deliver results in a fast-paced environment.</li>
+    <li>Proactive in identifying and resolving technical bottlenecks.</li>
   </ul>`;
 }
 
-// Convert an existing section object to clean HTML (prevents JSON showing in UI)
+// 2. EXISTING DATA FORMATTER (Fixes Raw JSON dumps)
 function sectionToBulletsHtml(sec) {
   if (!sec) return "";
   const items = Array.isArray(sec.items) ? sec.items : [];
   if (!items.length) return "";
 
-  // bullets type: items: ["a","b"]
-  if (sec.type !== "entries") {
-    const lis = items
-      .map(x => String(x || "").trim())
-      .filter(Boolean)
-      .slice(0, 8)
-      .map(t => `<li>${escapeHtml(t)}</li>`)
-      .join("");
-    return lis ? `<ul>${lis}</ul>` : "";
-  }
+  // If type is "entries" (like Work Exp), flatten bullets
+  if (sec.type === 'entries') {
+      const allBullets = [];
+      items.forEach(it => {
+          if (it.bullets && Array.isArray(it.bullets)) allBullets.push(...it.bullets);
+      });
+      if (allBullets.length) return `<ul>${allBullets.map(b => `<li>${escapeHtml(b)}</li>`).join('')}</ul>`;
+      return "";
+  } 
+  
+  // Simple list (like Traits)
+  return `<ul>${items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`;
+}
 
-  // entries type: items: [{key, bullets:[]}]
-  const out = [];
-  for (const it of items) {
-    if (it?.key && String(it.key).trim()) out.push(String(it.key).trim());
-    const bullets = Array.isArray(it?.bullets) ? it.bullets : [];
-    for (const b of bullets) {
-      const s = String(b || "").trim();
-      if (s) out.push(s);
-    }
-  }
-  const lis = out
-    .filter(Boolean)
-    .slice(0, 8)
-    .map(t => `<li>${escapeHtml(t)}</li>`)
-    .join("");
-  return lis ? `<ul>${lis}</ul>` : "";
+// 3. CANONICAL NAMES (Fixes Duplicate Sections)
+function canonicalSectionName(name) {
+  const s = String(name || "").trim().toLowerCase();
+  if (s.includes("work") || s.includes("experience")) return "Work Experience"; // Merge these
+  if (s.includes("technical") || s.includes("skill")) return "Skills";
+  if (s.includes("summary")) return "Summary";
+  if (s.includes("education")) return "Education";
+  return name.trim(); // Keep others as is (Certifications, etc)
 }
 
 // --- CONSTANTS ---
@@ -152,28 +82,24 @@ const RESUME_CSS = `
       padding: 20px;
     }
     .generated-resume * { box-sizing: border-box; }
-
     .resume-header { text-align: center; margin-bottom: 20px; }
     .resume-name { font-size: 28px; font-weight: 800; color: #1a365d; text-transform: uppercase; margin-bottom: 5px; }
     .resume-contact { font-size: 11px; color: #4a5568; }
     .resume-contact a { color: #2b6cb0; text-decoration: none; }
-
+    
     .resume-section-title {
       font-size: 13px; margin: 16px 0 8px; border-bottom: 1.5px solid #2b6cb0;
       color: #1a365d; text-transform: uppercase; letter-spacing: 1px; font-weight: bold;
     }
-
     .resume-item { margin-bottom: 12px; font-size: 11px; }
     .resume-row { display: flex; justify-content: space-between; align-items: baseline; width: 100%; }
     .resume-role { font-weight: bold; color: #000; }
     .resume-date { font-weight: bold; font-size: 10px; color: #000; }
     .resume-company { font-style: italic; color: #444; margin-bottom: 2px; display: block; }
-
     .generated-resume ul { margin-left: 18px; margin-top: 4px; padding: 0; }
     .generated-resume li { margin-bottom: 3px; font-size: 11px; }
     .generated-resume p { margin-bottom: 4px; font-size: 11px; }
-
-    /* Skills as Boxes/Chips */
+    
     .skill-tag {
       display: inline-block;
       padding: 3px 8px;
@@ -189,34 +115,34 @@ const RESUME_CSS = `
 `;
 
 async function callGeminiFlash(promptText) {
-  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not configured");
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(
-    GEMINI_API_KEY
-  )}`;
-
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
+  
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
-      temperature: 0.75, // keep creativity for invention
+      temperature: 0.85, // High creativity for invention
       maxOutputTokens: 3000,
-    },
+      responseMimeType: "application/json"
+    }
   };
 
   const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
   if (!resp.ok) {
-    const txt = await resp.text().catch(() => "");
+    const txt = await resp.text().catch(() => '');
     throw new Error(`Gemini API failed ${resp.status}: ${txt}`);
   }
-
+  
   const j = await resp.json();
   const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!candidate) throw new Error("No response from AI");
+  
   return candidate;
 }
 
@@ -227,408 +153,243 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") return res.status(204).end();
 
   try {
-    const body =
-      typeof req.body === "object" ? req.body : JSON.parse(req.body || "{}");
-    const { profile = {}, jd = "", nickname = "", scope = [] } = body;
+    const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+    const { profile, jd, nickname, scope = [] } = body;
 
-    // 1. Static Header
     const name = (profile.fullName || nickname || "User").toUpperCase();
     const contactLinks = [
-      profile.email
-        ? `<a href="mailto:${escapeHtml(profile.email)}">${escapeHtml(
-            profile.email
-          )}</a>`
-        : null,
-      profile.phone ? escapeHtml(profile.phone) : null,
-      profile.linkedin
-        ? `<a href="${escapeHtml(profile.linkedin)}">LinkedIn</a>`
-        : null,
-      profile.github ? `<a href="${escapeHtml(profile.github)}">GitHub</a>` : null,
-    ]
-      .filter(Boolean)
-      .join(" | ");
+      profile.email ? `<a href="mailto:${profile.email}">${profile.email}</a>` : null,
+      profile.phone,
+      profile.linkedin ? `<a href="${profile.linkedin}">LinkedIn</a>` : null,
+      profile.github ? `<a href="${profile.github}">GitHub</a>` : null,
+    ].filter(Boolean).join(" | ");
 
     let resumeBodyHtml = "";
-
-    // We will collect instructions here.
-    const aiPrompts = {};
-    const aiFallbacks = {};
-    const aiTypes = {}; // pid -> 'summary' | 'skills' | 'ul_items' | 'div_ul'
+    
+    // --- TRACKING FOR AI ---
+    // pid -> instruction
+    const aiPrompts = {}; 
+    // pid -> HTML fallback
+    const aiFallbacks = {}; 
+    // pid -> type ('summary', 'skills', 'list', 'block-list')
+    const aiTypes = {}; 
+    
     let sectionCounter = 0;
 
-    // Default sections if scope is empty
-    const rawSectionsToRender =
-      scope && scope.length > 0
-        ? scope
-        : ["Summary", "Skills", "Experience", "Education"];
-
-    // ✅ DEDUPE to prevent Experience + Work Experience duplicates
-    const sectionsToRender = dedupeScope(rawSectionsToRender);
-
-    for (const sectionName of sectionsToRender) {
-      const key = String(sectionName || "").trim();
-      const canon = canonicalSectionName(key);
-
-      // --- A. SUMMARY ---
-      if (canon === "summary") {
-        resumeBodyHtml += `<div class="resume-section-title">Summary</div>`;
-        const pid = `sec_${sectionCounter++}`;
-        const original = String(profile.summary || "").trim();
-
-        resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-
-        // ✅ Force rewrite (no lazy "good"), tailored to JD
-        aiPrompts[pid] = `
-Write a 3-sentence professional summary tailored to this job.
-JD: ${String(jd || "").slice(0, 600)}
-User input summary: "${original}"
-
-Rules:
-- Do NOT reuse the raw input as-is (e.g., if it is "good", don't output "good").
-- Make it specific: role title, core skills, and impact/strengths.
-- 3 sentences only.
-Return plain text only (no HTML).
-        `.trim();
-
-        aiTypes[pid] = "summary";
-        // Fallback: if user summary empty/short -> invent
-        aiFallbacks[pid] =
-          original && original.length > 10
-            ? `<p>${escapeHtml(original)}</p>`
-            : `<p>Results-oriented candidate with strong fundamentals aligned to the target role, focused on delivering clean and reliable outcomes. Skilled in problem-solving, learning quickly, and applying best practices to real tasks and projects. Motivated to contribute to a team environment and grow through challenging responsibilities.</p>`;
-      }
-
-      // --- B. SKILLS (CHIPS) ---
-      else if (canon === "skills") {
-        resumeBodyHtml += `<div class="resume-section-title">Technical Skills</div>`;
-        const pid = `sec_${sectionCounter++}`;
-
-        const userSkills = Array.isArray(profile.skills)
-          ? profile.skills
-          : profile.skills
-          ? String(profile.skills).split(",")
-          : [];
-
-        resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-
-        aiPrompts[pid] = `
-List 8-12 technical skills relevant to this job.
-Job: ${String(jd || "").slice(0, 500)}
-User skills to include if relevant: ${userSkills.join(", ")}
-
-Return ONLY a COMMA-SEPARATED list (no bullets, no numbering, no HTML).
-        `.trim();
-
-        aiTypes[pid] = "skills";
-
-        // ✅ Never show "(Add skills)" — always show chips
-        const fallbackChips =
-          userSkills.length > 0
-            ? userSkills
-                .map((s) =>
-                  `<span class="skill-tag">${escapeHtml(String(s).trim())}</span>`
-                )
-                .join("")
-            : inventedFallbackForSection("skills", jd);
-
-        aiFallbacks[pid] = fallbackChips;
-      }
-
-      // --- C. EXPERIENCE (DEDUPED) ---
-      else if (canon === "experience") {
-        // Find all entries sections matching experience/work
-        const experienceSections = (profile.customSections || []).filter(
-          (s) =>
-            s &&
-            s.type === "entries" &&
-            (safeLower(s.title).includes("experience") ||
-              safeLower(s.title).includes("work"))
-        );
-
-        if (experienceSections.length > 0) {
-          resumeBodyHtml += `<div class="resume-section-title">Work Experience</div>`;
-
-          for (const sec of experienceSections) {
-            for (const item of sec.items || []) {
-              const pid = `sec_${sectionCounter++}`;
-
-              resumeBodyHtml += `
-                <div class="resume-item">
-                  <div class="resume-row">
-                    <span class="resume-role">${escapeHtml(item.key || "")}</span>
-                    <span class="resume-date">${escapeHtml(item.date || "")}</span>
-                  </div>
-                  <span class="resume-company">${escapeHtml(sec.title || "")}</span>
-                  <ul id="${pid}">[${pid}]</ul>
-                </div>`;
-
-              aiPrompts[pid] = `
-Write 3 strong, metric-driven resume bullet points for this role.
-Role: ${String(item.key || "")}
-Job: ${String(jd || "").slice(0, 600)}
-Existing bullets (if any): ${JSON.stringify(item.bullets || [])}
-
-Return ONLY pipe-separated bullets:
-Bullet 1 | Bullet 2 | Bullet 3
-No HTML.
-              `.trim();
-
-              aiTypes[pid] = "ul_items";
-
-              const originalBullets =
-                Array.isArray(item.bullets) && item.bullets.length
-                  ? item.bullets
-                      .map((b) => `<li>${escapeHtml(b)}</li>`)
-                      .join("")
-                  : "";
-
-              aiFallbacks[pid] =
-                originalBullets ||
-                `<li>Contributed to deliverables aligned with team goals and timelines.</li>
-                 <li>Applied best practices to improve reliability and maintainability.</li>
-                 <li>Collaborated effectively and communicated progress clearly.</li>`;
-            }
-          }
-        } else {
-          // ✅ No experience data: STILL generate projects-style bullets (never show "No experience data")
-          resumeBodyHtml += `<div class="resume-section-title">Experience</div>`;
-          const pid = `sec_${sectionCounter++}`;
-          resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-
-          aiPrompts[pid] = `
-User has no work experience listed. Create a small "Projects / Experience" section aligned to the job.
-Job: ${String(jd || "").slice(0, 600)}
-
-Return ONLY pipe-separated bullets:
-Bullet 1 | Bullet 2 | Bullet 3
-No HTML.
-          `.trim();
-
-          aiTypes[pid] = "div_ul";
-          aiFallbacks[pid] = inventedFallbackForSection("experience", jd);
+    // --- STEP 1: DEDUPLICATE SCOPE ---
+    const seen = new Set();
+    const sectionsToRender = [];
+    
+    // Prefer user scope, else default
+    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Skills', 'Work Experience', 'Education'];
+    
+    // Map to canonical names and dedup
+    for (const s of rawScope) {
+        const c = canonicalSectionName(s);
+        if (!seen.has(c)) {
+            seen.add(c);
+            sectionsToRender.push({ original: s, canonical: c });
         }
-      }
-
-      // --- D. EDUCATION ---
-      else if (canon === "education") {
-        resumeBodyHtml += `<div class="resume-section-title">Education</div>`;
-        const eduList =
-          profile.education && profile.education.length
-            ? profile.education
-            : profile.college
-            ? [profile.college]
-            : [];
-
-        resumeBodyHtml += `<div class="resume-item">`;
-        if (eduList.length > 0) {
-          resumeBodyHtml += eduList
-            .map((e) => `<div>${escapeHtml(e)}</div>`)
-            .join("");
-        } else {
-          resumeBodyHtml += `<div>${escapeHtml("Education details available upon request.")}</div>`;
-        }
-        resumeBodyHtml += `</div>`;
-      }
-
-      // --- E. OTHER / NEW SECTIONS (Certifications, Achievements, Character Traits, etc.) ---
-      else {
-        // Use user-selected key as display label, but canon for logic
-        const displayTitle =
-          canon === "character traits"
-            ? "Character Traits"
-            : canon === "certifications"
-            ? "Certifications"
-            : canon === "achievements"
-            ? "Achievements"
-            : key;
-
-        resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(
-          displayTitle
-        )}</div>`;
-
-        const pid = `sec_${sectionCounter++}`;
-
-        resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-
-        // Try to find an existing section by canonical match (prevents mismatch)
-        const existingSec = (profile.customSections || []).find((s) => {
-          const st = canonicalSectionName(s?.title || "");
-          return st && st === canon;
-        });
-
-        if (existingSec) {
-          // Improve existing, but fallback must NEVER be JSON
-          aiPrompts[pid] = `
-Refine this resume section for the job. Keep it realistic and professional.
-Section: ${displayTitle}
-Job: ${String(jd || "").slice(0, 600)}
-Current data: ${JSON.stringify(existingSec)}
-
-Return ONLY pipe-separated bullets:
-Bullet 1 | Bullet 2 | Bullet 3
-No HTML.
-          `.trim();
-
-          aiTypes[pid] = "div_ul";
-
-          aiFallbacks[pid] =
-            sectionToBulletsHtml(existingSec) ||
-            inventedFallbackForSection(displayTitle, jd);
-        } else {
-          // INVENT DATA (no "could not generate")
-          aiPrompts[pid] = `
-User needs a "${displayTitle}" section but has no data.
-Job: ${String(jd || "").slice(0, 600)}
-
-Invent 2-3 realistic bullet points that fit the job and the candidate profile.
-Return ONLY pipe-separated bullets:
-Bullet 1 | Bullet 2 | Bullet 3
-No HTML.
-          `.trim();
-
-          aiTypes[pid] = "div_ul";
-          aiFallbacks[pid] = inventedFallbackForSection(displayTitle, jd);
-        }
-      }
     }
 
-    // 3. ASSEMBLE SKELETON
-    let htmlSkeleton = `
-      <div class="generated-resume">
-        ${RESUME_CSS}
-        <div class="resume-header">
-          <div class="resume-name">${escapeHtml(name)}</div>
-          <div class="resume-contact">${contactLinks}</div>
-        </div>
-        ${resumeBodyHtml}
-      </div>`;
+    // Sort: Summary -> Skills -> Experience -> Education -> Others
+    const priority = ['Summary', 'Skills', 'Work Experience', 'Education'];
+    sectionsToRender.sort((a, b) => {
+        const ia = priority.indexOf(a.canonical);
+        const ib = priority.indexOf(b.canonical);
+        if (ia !== -1 && ib !== -1) return ia - ib;
+        if (ia !== -1) return -1;
+        if (ib !== -1) return 1;
+        return 0;
+    });
 
-    // 4. CALL AI
-    if (Object.keys(aiPrompts).length > 0 && String(jd || "").trim()) {
-      const prompt = `
-You are a Resume Content Generator.
-
-JOB DESCRIPTION:
-${String(jd || "").slice(0, 1200)}
-
-TASK:
-Respond with a VALID JSON object.
-Keys: ${Object.keys(aiPrompts).join(", ")}
-Values: Generated TEXT ONLY.
-
-INSTRUCTIONS PER KEY:
-${Object.entries(aiPrompts)
-  .map(([k, v]) => `- ${k}: ${v}`)
-  .join("\n")}
-
-IMPORTANT RULES:
-- Return only JSON.
-- No markdown fences.
-- No HTML tags in values.
-- For skills: comma-separated only.
-- For bullets: pipe-separated only.
-- For summary: plain text paragraph (3 sentences).
-`.trim();
-
-      try {
-        const aiJsonText = await callGeminiFlash(prompt);
-
-        let aiData = {};
-        try {
-          const clean = String(aiJsonText || "")
-            .replace(/```json|```/g, "")
-            .trim();
-          aiData = JSON.parse(clean);
-        } catch (e) {
-          console.error("JSON parse error:", e);
+    // --- STEP 2: BUILD SECTIONS ---
+    for (const secObj of sectionsToRender) {
+        const label = secObj.canonical; // Display Name
+        
+        // --- A. SUMMARY ---
+        if (label === 'Summary') {
+            resumeBodyHtml += `<div class="resume-section-title">Summary</div>`;
+            const pid = `sec_${sectionCounter++}`;
+            const original = profile.summary || "";
+            
+            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
+            
+            aiPrompts[pid] = `Write a professional 3-sentence summary tailored to this job. JD: "${jd.slice(0,300)}...". User input: "${original}". DO NOT use the word "${original}" directly. Expand it professionally.`;
+            aiFallbacks[pid] = original.length > 10 ? `<p>${escapeHtml(original)}</p>` : inventedFallbackForSection('Summary', jd);
+            aiTypes[pid] = 'summary';
         }
-
-        for (const pid of Object.keys(aiPrompts)) {
-          let val = aiData[pid];
-
-          // Basic sanitize
-          if (typeof val === "string") val = val.trim();
-
-          if (val && typeof val === "string" && val.length > 2) {
-            const type = aiTypes[pid];
-
-            if (type === "skills") {
-              // Skills -> Chips
-              const skills = val
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean)
-                .slice(0, 14);
-
-              const chips =
-                skills.length > 0
-                  ? skills
-                      .map(
-                        (s) =>
-                          `<span class="skill-tag">${escapeHtml(s)}</span>`
-                      )
-                      .join("")
-                  : aiFallbacks[pid];
-
-              htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-            } else if (type === "ul_items") {
-              // UL items only (already inside <ul>)
-              const bullets = val
-                .split("|")
-                .map((s) => s.trim())
-                .filter(Boolean)
-                .slice(0, 6);
-
-              const lis =
-                bullets.length > 0
-                  ? bullets
-                      .map((b) => `<li>${escapeHtml(b)}</li>`)
-                      .join("")
-                  : aiFallbacks[pid];
-
-              htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-            } else if (type === "div_ul") {
-              // Wrap bullets in <ul> inside a div
-              const bullets = val
-                .split("|")
-                .map((s) => s.trim())
-                .filter(Boolean)
-                .slice(0, 6);
-
-              const ul =
-                bullets.length > 0
-                  ? `<ul>${bullets
-                      .map((b) => `<li>${escapeHtml(b)}</li>`)
-                      .join("")}</ul>`
-                  : aiFallbacks[pid];
-
-              htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, ul);
+        
+        // --- B. SKILLS ---
+        else if (label === 'Skills') {
+            resumeBodyHtml += `<div class="resume-section-title">Technical Skills</div>`;
+            const pid = `sec_${sectionCounter++}`;
+            const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
+            
+            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
+            
+            aiPrompts[pid] = `List 8-12 technical skills relevant to '${jd.slice(0,50)}'. Include user skills: ${userSkills.join(', ')}. Return comma-separated list.`;
+            
+            // Fallback: Original chips OR Invented chips
+            const fallbackChips = userSkills.length 
+                ? userSkills.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join('') 
+                : `<span class="skill-tag">Python</span><span class="skill-tag">SQL</span><span class="skill-tag">Git</span>`;
+            
+            aiFallbacks[pid] = fallbackChips;
+            aiTypes[pid] = 'skills';
+        }
+        
+        // --- C. EXPERIENCE ---
+        else if (label === 'Work Experience') {
+            const experienceSections = (profile.customSections || [])
+               .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')));
+            
+            if (experienceSections.length > 0) {
+                resumeBodyHtml += `<div class="resume-section-title">Work Experience</div>`;
+                for (const sec of experienceSections) {
+                    for (const item of (sec.items || [])) {
+                        const pid = `sec_${sectionCounter++}`;
+                        const originalBullets = (Array.isArray(item.bullets) && item.bullets.length) ? item.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('') : "";
+                        
+                        resumeBodyHtml += `
+                          <div class="resume-item">
+                            <div class="resume-row">
+                              <span class="resume-role">${escapeHtml(item.key)}</span>
+                              <span class="resume-date">${escapeHtml(item.date || '')}</span>
+                            </div>
+                            <span class="resume-company">${escapeHtml(sec.title)}</span>
+                            <ul id="${pid}">[${pid}]</ul>
+                          </div>`;
+                        
+                        aiPrompts[pid] = `Rewrite these bullet points for '${item.key}' to match the JD: "${item.bullets}". Focus on metrics. Return pipe-separated strings (Item 1 | Item 2).`;
+                        aiFallbacks[pid] = originalBullets || `<li>${escapeHtml(item.key)}</li>`;
+                        aiTypes[pid] = 'list'; // Insert LI tags into UL
+                    }
+                }
             } else {
-              // Summary -> paragraph
-              htmlSkeleton = htmlSkeleton.replace(
-                `[${pid}]`,
-                `<p>${escapeHtml(val)}</p>`
-              );
+                // INVENT EXPERIENCE
+                resumeBodyHtml += `<div class="resume-section-title">Work Experience</div>`;
+                const pid = `sec_${sectionCounter++}`;
+                resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
+                
+                aiPrompts[pid] = `User has no experience. Generate 2 generic 'Personal Project' bullets for a '${jd.slice(0,50)}' role. Return pipe-separated strings.`;
+                aiFallbacks[pid] = "<ul><li><i>(No experience data)</i></li></ul>";
+                aiTypes[pid] = 'block-list'; // Wrap LI in UL
             }
-          } else {
-            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-          }
         }
-      } catch (e) {
-        console.error("AI Error", e);
-        // fallback to safe HTML
-        for (const pid of Object.keys(aiPrompts)) {
-          htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+        
+        // --- D. EDUCATION ---
+        else if (label === 'Education') {
+             resumeBodyHtml += `<div class="resume-section-title">Education</div>`;
+             const eduList = (profile.education && profile.education.length) 
+                ? profile.education 
+                : (profile.college ? [profile.college] : []);
+             
+             resumeBodyHtml += `<div class="resume-item">`;
+             if (eduList.length > 0) {
+                 resumeBodyHtml += eduList.map(e => `<div>${escapeHtml(e)}</div>`).join('');
+             } else {
+                 resumeBodyHtml += `<div><i>(Add Education)</i></div>`;
+             }
+             resumeBodyHtml += `</div>`;
         }
-      }
+        
+        // --- E. CUSTOM SECTIONS (Certifications, Achievements, Traits) ---
+        else {
+            resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
+            const pid = `sec_${sectionCounter++}`;
+            
+            // Check existing
+            const existingSec = (profile.customSections || []).find(s => s.title.toLowerCase().trim() === secObj.original.toLowerCase().trim());
+            
+            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
+            
+            if (existingSec) {
+                // IMPROVE EXISTING
+                const fallbackHtml = sectionToBulletsHtml(existingSec);
+                aiPrompts[pid] = `Refine this list for '${label}': ${JSON.stringify(existingSec)}. Return pipe-separated strings.`;
+                aiFallbacks[pid] = fallbackHtml;
+                aiTypes[pid] = 'block-list';
+            } else {
+                // INVENT DATA (Fix for empty sections)
+                aiPrompts[pid] = `User checked '${label}' but has no data. INVENT 2 realistic examples for a '${jd.slice(0,50)}' resume. Return pipe-separated strings.`;
+                aiFallbacks[pid] = inventedFallbackForSection(label, jd);
+                aiTypes[pid] = 'block-list';
+            }
+        }
+    }
+
+    // --- STEP 3: CALL AI & FORMAT ---
+    let htmlSkeleton = `
+    <div class="generated-resume">
+      ${RESUME_CSS}
+      <div class="resume-header">
+        <div class="resume-name">${escapeHtml(name)}</div>
+        <div class="resume-contact">${contactLinks}</div>
+      </div>
+      ${resumeBodyHtml}
+    </div>`;
+
+    if (Object.keys(aiPrompts).length > 0 && jd) {
+        const prompt = `
+        You are a Resume Content Generator.
+        TASK: Respond with a valid JSON object. Keys: ${Object.keys(aiPrompts).join(', ')}.
+        
+        INSTRUCTIONS:
+        ${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
+        
+        FORMATTING RULES:
+        - Skills: "Skill1, Skill2, Skill3"
+        - Lists/Bullets: "Item 1 | Item 2 | Item 3" (Use pipes to separate)
+        - Summaries: Plain text paragraph.
+        `;
+
+        try {
+            const aiJsonText = await callGeminiFlash(prompt);
+            let aiData = {};
+            try {
+                aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim());
+            } catch (e) { console.error("JSON Error", e); }
+
+            Object.keys(aiPrompts).forEach(pid => {
+                let val = aiData[pid];
+                const type = aiTypes[pid];
+                
+                if (val && typeof val === 'string' && val.length > 2) {
+                    if (type === 'skills') {
+                        const chips = val.split(',').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join('');
+                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                    } 
+                    else if (type === 'list') { // Insert LI only (for inside UL)
+                        const lis = val.split('|').map(b => `<li>${escapeHtml(b.trim())}</li>`).join('');
+                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                    }
+                    else if (type === 'block-list') { // Wrap LI in UL
+                        const lis = val.split('|').map(b => `<li>${escapeHtml(b.trim())}</li>`).join('');
+                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<ul>${lis}</ul>`);
+                    }
+                    else { // Summary
+                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(val)}</p>`);
+                    }
+                } else {
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+                }
+            });
+
+        } catch (e) {
+            console.error("AI Error", e);
+            Object.keys(aiPrompts).forEach(pid => {
+                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+            });
+        }
     } else {
-      // No JD -> fall back immediately
-      for (const pid of Object.keys(aiPrompts)) {
-        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-      }
+         Object.keys(aiPrompts).forEach(pid => {
+             htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+         });
     }
 
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton } });
+
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: err.message });
