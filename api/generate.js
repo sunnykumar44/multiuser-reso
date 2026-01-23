@@ -171,10 +171,12 @@ module.exports = async (req, res) => {
     const aiPrompts = {}; 
     // pid -> HTML fallback
     const aiFallbacks = {}; 
-    // pid -> type ('summary', 'skills', 'list', 'block-list')
+    // pid -> type ('summary', 'skills', 'list', 'block-list', 'traits')
     const aiTypes = {}; 
-    
-    let sectionCounter = 0;
+    // pid -> canonical label (for invented fallbacks)
+    const aiLabels = {};
+     
+     let sectionCounter = 0;
 
     // --- STEP 1: DEDUPLICATE SCOPE ---
     const seen = new Set();
@@ -218,7 +220,8 @@ module.exports = async (req, res) => {
             aiPrompts[pid] = `Write a professional 3-sentence summary tailored to this job. JD: "${jd.slice(0,300)}...". User input: "${original}". DO NOT use the word "${original}" directly. Expand it professionally.`;
             aiFallbacks[pid] = original.length > 10 ? `<p>${escapeHtml(original)}</p>` : inventedFallbackForSection('Summary', jd);
             aiTypes[pid] = 'summary';
-        }
+            aiLabels[pid] = 'Summary';
+         }
         
         // --- B. SKILLS ---
         else if (label === 'Skills') {
@@ -237,7 +240,8 @@ module.exports = async (req, res) => {
             
             aiFallbacks[pid] = fallbackChips;
             aiTypes[pid] = 'skills';
-        }
+            aiLabels[pid] = 'Skills';
+         }
         
         // --- C. EXPERIENCE ---
         else if (label === 'Work Experience') {
@@ -264,7 +268,8 @@ module.exports = async (req, res) => {
                         aiPrompts[pid] = `Rewrite these bullet points for '${item.key}' to match the JD: "${item.bullets}". Focus on metrics. Return pipe-separated strings (Item 1 | Item 2).`;
                         aiFallbacks[pid] = originalBullets || `<li>${escapeHtml(item.key)}</li>`;
                         aiTypes[pid] = 'list'; // Insert LI tags into UL
-                    }
+                        aiLabels[pid] = sec.title || 'Work Experience';
+                     }
                 }
             } else {
                 // INVENT EXPERIENCE
@@ -275,7 +280,8 @@ module.exports = async (req, res) => {
                 aiPrompts[pid] = `User has no experience. Generate 2 generic 'Personal Project' bullets for a '${jd.slice(0,50)}' role. Return pipe-separated strings.`;
                 aiFallbacks[pid] = "<ul><li><i>(No experience data)</i></li></ul>";
                 aiTypes[pid] = 'block-list'; // Wrap LI in UL
-            }
+                aiLabels[pid] = 'Work Experience';
+             }
         }
         
         // --- D. EDUCATION ---
@@ -310,14 +316,22 @@ module.exports = async (req, res) => {
                 aiPrompts[pid] = `Refine this list for '${label}': ${JSON.stringify(existingSec)}. Return pipe-separated strings.`;
                 aiFallbacks[pid] = fallbackHtml;
                 aiTypes[pid] = 'block-list';
-            } else {
+                // If this is Character Traits, render as tags
+                if ((label||'').toLowerCase().includes('character') || (label||'').toLowerCase().includes('trait')) {
+                    aiTypes[pid] = 'traits';
+                } else {
+                    aiTypes[pid] = 'block-list';
+                }
+                aiLabels[pid] = label;
+             } else {
                 // INVENT DATA (Fix for empty sections)
                 aiPrompts[pid] = `User checked '${label}' but has no data. INVENT 2 realistic examples for a '${jd.slice(0,50)}' resume. Return pipe-separated strings.`;
                 aiFallbacks[pid] = inventedFallbackForSection(label, jd);
                 aiTypes[pid] = 'block-list';
-            }
-        }
-    }
+                aiLabels[pid] = label;
+             }
+         }
+     }
 
     // --- STEP 3: CALL AI & FORMAT ---
     let htmlSkeleton = `
@@ -354,44 +368,67 @@ module.exports = async (req, res) => {
             Object.keys(aiPrompts).forEach(pid => {
                 let val = aiData[pid];
                 const type = aiTypes[pid];
+                const label = aiLabels[pid] || '';
                 
                 if (val && typeof val === 'string' && val.length > 2) {
                     if (type === 'skills') {
-                        const chips = val.split(',').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join('');
+                        // normalize various separators (comma, pipe, newline)
+                        const parts = val.split(/[,|\n;]+/).map(s=>s.trim()).filter(Boolean);
+                        const chips = parts.length ? parts.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join('') : aiFallbacks[pid];
+                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                     } 
+                     else if (type === 'list') { // Insert LI only (for inside UL)
+                         const lis = val.split('|').map(b => `<li>${escapeHtml(b.trim())}</li>`).join('');
+                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                     }
+                     else if (type === 'block-list') { // Wrap LI in UL
+                         const lis = val.split('|').map(b => `<li>${escapeHtml(b.trim())}</li>`).join('');
+                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<ul>${lis}</ul>`);
+                     }
+                     else if (type === 'traits') {
+                        // render as inline tags for concise traits
+                        const parts = val.split(/[,|\n;]+/).map(s=>s.trim()).filter(Boolean);
+                        const chips = parts.length ? parts.map(s=>`<span class="skill-tag">${escapeHtml(s)}</span>`).join('') : aiFallbacks[pid];
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    } 
-                    else if (type === 'list') { // Insert LI only (for inside UL)
-                        const lis = val.split('|').map(b => `<li>${escapeHtml(b.trim())}</li>`).join('');
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    }
-                    else if (type === 'block-list') { // Wrap LI in UL
-                        const lis = val.split('|').map(b => `<li>${escapeHtml(b.trim())}</li>`).join('');
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<ul>${lis}</ul>`);
-                    }
-                    else { // Summary
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(val)}</p>`);
-                    }
-                } else {
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                }
-            });
+                     }
+                     else { // Summary
+                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(val)}</p>`);
+                     }
+                 } else {
+                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+                 }
+             });
 
         } catch (e) {
             console.error("AI Error", e);
             Object.keys(aiPrompts).forEach(pid => {
                 htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
             });
-        }
+         }
     } else {
          Object.keys(aiPrompts).forEach(pid => {
              htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
          });
     }
+    // FINAL: Ensure Projects limited to two if present: search for sections titled 'Projects' or 'Project' and trim lists
+    htmlSkeleton = htmlSkeleton.replace(/(<div class="resume-section-title">\s*Projects\s*<\/div>[\s\S]*?<ul>)([\s\S]*?)<\/ul>/i, (m, head, listHtml) => {
+      const items = listHtml.split(/<li>/i).slice(1).map(s => '<li>' + s.split('</li>')[0] + '</li>');
+      const kept = items.slice(0,2).join('');
+      return head + kept + '</ul>';
+    });
 
-    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton } });
+    // FINAL: Fill any remaining empty placeholders with invented content
+    htmlSkeleton = htmlSkeleton.replace(/\[sec_\d+\]/g, (m) => {
+      // try to infer label from aiLabels map by pid
+      const pid = m.replace(/\[|\]/g,'');
+      const label = (typeof aiLabels === 'object' && aiLabels && aiLabels[pid]) ? aiLabels[pid] : 'Details';
+      return inventedFallbackForSection(label, jd);
+    });
+ 
+     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton } });
 
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: err.message });
-  }
-};
+   } catch (err) {
+     console.error(err);
+     return res.status(500).json({ error: err.message });
+   }
+ };
