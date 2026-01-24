@@ -133,7 +133,7 @@ function canonicalSectionName(name) {
 }
 
 // --- CONSTANTS ---
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY || process.env.GCP_API_KEY;
 
 const RESUME_CSS = `
   <style>
@@ -343,7 +343,7 @@ module.exports = async (req, res) => {
 
   try {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-    const { profile, jd, nickname, scope = [] } = body;
+    const { profile, jd, nickname, scope = [], aiOnly = false } = body;
 
     const name = (profile.fullName || nickname || "User").toUpperCase();
     const contactLinks = [
@@ -549,7 +549,7 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY };
+    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly };
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
         // try AI with retries for short JD to encourage variability
