@@ -3,82 +3,91 @@ const { saveHistory } = require("./firebase");
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
 // Extracts meaningful technical and soft skills from JD
 function extractKeywordsFromJD(jd, type = 'all') {
-  if (!jd || jd.trim().length < 5) {
-    if (type === 'technical') return ["Python", "SQL", "Git", "REST APIs", "Linux", "Docker"];
-    if (type === 'soft') return ["Communication", "Problem Solving", "Teamwork", "Leadership", "Time Management", "Analytical"];
-    return ["Technical", "Problem Solving", "Communication", "Teamwork", "Leadership", "Analytical"];
+  if (!jd || jd.trim().length < 20) {
+    // For very short JDs, use the words themselves
+    const words = jd.trim().split(/\s+/).filter(w => w.length > 2);
+    if (type === 'technical') return words.length ? words : ["Python", "SQL"];
+    if (type === 'soft') return ["Communication", "Teamwork"];
+    return words.length ? words : ["Technical"];
   }
   
   const stopWords = new Set([
     "and", "the", "for", "with", "ing", "to", "in", "a", "an", "of", "on", "at", "by", "is", "are", 
     "was", "were", "be", "been", "job", "role", "work", "experience", "candidate", "ability", 
     "knowledge", "looking", "seeking", "must", "have", "will", "can", "good", "strong", "years", 
-    "description", "looking", "required", "preferred", "should", "responsibilities", "requirements",
-    "analyst", "developer", "engineer", "manager", "specialist", "coordinator", "intern", "junior", "senior"
+    "description", "required", "preferred", "should", "responsibilities", "requirements",
+    "analyst", "developer", "engineer", "manager", "specialist", "coordinator", "intern", "junior", "senior", "professional"
   ]);
 
-  // Technical skill indicators
-  const technicalIndicators = new Set([
-    "python", "java", "javascript", "sql", "react", "angular", "node", "django", "flask", "spring",
-    "aws", "azure", "docker", "kubernetes", "git", "api", "rest", "graphql", "mongodb", "postgresql",
-    "mysql", "redis", "kafka", "rabbitmq", "jenkins", "ci", "cd", "linux", "bash", "shell", "html",
-    "css", "typescript", "c++", "ruby", "php", "go", "rust", "scala", "kotlin", "swift", "matlab",
-    "tensorflow", "pytorch", "pandas", "numpy", "scikit", "tableau", "powerbi", "excel", "jira",
-    "agile", "scrum", "devops", "microservices", "restful", "oauth", "jwt", "nosql", "etl", "hadoop"
-  ]);
-
-  // Soft skill indicators
-  const softSkills = new Set([
-    "communication", "problem", "solving", "teamwork", "leadership", "analytical", "thinking",
-    "management", "time", "adaptability", "initiative", "collaboration", "creative", "critical",
-    "attention", "detail", "organizational", "interpersonal", "multitasking", "decision"
-  ]);
-
-  // Clean and split text
+  // EXPANDED Technical skill patterns (case-insensitive matching)
   const text = jd.toLowerCase();
-  const words = text.replace(/[^a-z0-9\s+#\.]/g, ' ').split(/\s+/);
+  const technicalSkills = [];
   
-  // Separate technical and soft skills
-  const technicalWords = [];
-  const softWords = [];
+  // Programming Languages
+  const languages = ["python", "java", "javascript", "typescript", "c++", "c#", "ruby", "php", "go", "rust", "scala", "kotlin", "swift", "r", "matlab", "perl", "shell", "bash"];
+  languages.forEach(lang => {
+    if (text.includes(lang)) technicalSkills.push(lang.charAt(0).toUpperCase() + lang.slice(1));
+  });
   
-  words.forEach(w => {
-    if (w.length > 2 && !stopWords.has(w)) {
-      if (technicalIndicators.has(w)) {
-        technicalWords.push(w.charAt(0).toUpperCase() + w.slice(1));
-      } else if (softSkills.has(w)) {
-        softWords.push(w.charAt(0).toUpperCase() + w.slice(1));
-      }
+  // Frameworks & Libraries
+  const frameworks = ["react", "angular", "vue", "django", "flask", "spring", "node", "express", "rails", "laravel", "dotnet", ".net", "tensorflow", "pytorch", "pandas", "numpy", "scikit"];
+  frameworks.forEach(fw => {
+    if (text.includes(fw)) technicalSkills.push(fw.charAt(0).toUpperCase() + fw.slice(1));
+  });
+  
+  // Databases
+  const databases = ["sql", "mysql", "postgresql", "mongodb", "redis", "oracle", "cassandra", "dynamodb", "sqlite"];
+  databases.forEach(db => {
+    if (text.includes(db)) technicalSkills.push(db.toUpperCase());
+  });
+  
+  // Cloud & DevOps
+  const cloud = ["aws", "azure", "gcp", "docker", "kubernetes", "jenkins", "ci/cd", "terraform", "ansible"];
+  cloud.forEach(c => {
+    if (text.includes(c)) technicalSkills.push(c.toUpperCase());
+  });
+  
+  // Tools & Others
+  const tools = ["git", "jira", "linux", "api", "rest", "graphql", "oauth", "jwt", "microservices", "agile", "scrum", "tableau", "powerbi", "excel", "spark", "hadoop", "kafka"];
+  tools.forEach(t => {
+    if (text.includes(t)) technicalSkills.push(t.charAt(0).toUpperCase() + t.slice(1));
+  });
+
+  // Soft skills extraction
+  const softSkillPatterns = ["communication", "problem solving", "teamwork", "leadership", "analytical", "time management", "adaptability", "critical thinking", "collaboration", "attention to detail"];
+  const softSkills = [];
+  softSkillPatterns.forEach(skill => {
+    if (text.includes(skill.toLowerCase().replace(/\s+/g, ''))) {
+      softSkills.push(skill.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '));
     }
   });
 
   // Remove duplicates
-  const uniqueTech = [...new Set(technicalWords)];
-  const uniqueSoft = [...new Set(softWords)];
-
-  // Pad with defaults if needed
-  const defaultTech = ["Python", "SQL", "Git", "REST APIs", "Linux", "Docker", "JavaScript", "React"];
-  const defaultSoft = ["Communication", "Problem Solving", "Teamwork", "Leadership", "Time Management", "Analytical Thinking"];
+  const uniqueTech = [...new Set(technicalSkills)];
+  const uniqueSoft = [...new Set(softSkills)];
 
   if (type === 'technical') {
-    const result = [...uniqueTech];
-    for (const skill of defaultTech) {
-      if (result.length >= 15) break;
-      if (!result.includes(skill)) result.push(skill);
+    // If no tech skills found, extract ANY capitalized words or technical-sounding words
+    if (uniqueTech.length === 0) {
+      const words = jd.split(/\s+/);
+      words.forEach(w => {
+        const clean = w.replace(/[^a-zA-Z0-9+#]/g, '');
+        if (clean.length > 2 && !stopWords.has(clean.toLowerCase())) {
+          uniqueTech.push(clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase());
+        }
+      });
     }
-    return result.slice(0, 15);
+    return uniqueTech.slice(0, 15);
   }
 
   if (type === 'soft') {
-    const result = [...uniqueSoft];
-    for (const skill of defaultSoft) {
-      if (result.length >= 8) break;
-      if (!result.includes(skill)) result.push(skill);
+    // Default soft skills if none found
+    if (uniqueSoft.length === 0) {
+      return ["Communication", "Problem Solving", "Teamwork", "Leadership", "Time Management", "Analytical Thinking"];
     }
-    return result.slice(0, 8);
+    return uniqueSoft.slice(0, 8);
   }
 
-  // Default: return both
   return [...uniqueTech, ...uniqueSoft].slice(0, 18);
 }
 
