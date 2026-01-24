@@ -361,16 +361,16 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">Certifications</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            aiPrompts[pid] = `Create 2 certifications using ONLY keywords from: "${jd.slice(0,200)}". Format: "Cert Name with JD keyword | Cert Name with JD keyword".`;
-            aiFallbacks[pid] = getSmartFallback('certifications', jd).split('|').map(c => `<li>${c.trim()}</li>`).join('');
+            aiPrompts[pid] = `INTELLIGENT CERTIFICATION GENERATION for "${expandedJD.slice(0, 100)}" role. Generate 2 REAL, FULL certification names that: (1) Match the technical skills (2) Are industry-standard (3) Appropriate for entry-level. Examples: "AWS Certified Cloud Practitioner", "Oracle Certified Associate, Java SE 11 Developer", "Microsoft Certified: Azure Fundamentals", "PCEP – Certified Entry-Level Python Programmer". Format: "Full Cert Name | Full Cert Name". NO generic names.`;
+            aiFallbacks[pid] = getSmartFallback('certifications', expandedJD).split('|').map(c => `<li>${c.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
         else if (label === 'Achievements') {
             resumeBodyHtml += `<div class="resume-section-title">Achievements</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            aiPrompts[pid] = `Create 2 achievements using ONLY keywords from: "${jd.slice(0,200)}". Pipe-separated. Make them metric-driven and JD-relevant.`;
-            aiFallbacks[pid] = getSmartFallback('achievements', jd).split('|').map(a => `<li>${a.trim()}</li>`).join('');
+            aiPrompts[pid] = `INTELLIGENT ACHIEVEMENT GENERATION for "${expandedJD.slice(0, 100)}" role. Create 2 SPECIFIC, MEASURABLE achievements that: (1) Use technical skills (2) Show quantifiable results (3) Are realistic for freshers. Examples: "Reduced API response time by 35% through caching optimization", "Automated data processing pipeline saving 20 hours/week", "Improved code test coverage from 60% to 85%". Format: "Achievement 1 | Achievement 2". NO generic statements.`;
+            aiFallbacks[pid] = getSmartFallback('achievements', expandedJD).split('|').map(a => `<li>${a.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
         else {
@@ -401,41 +401,60 @@ module.exports = async (req, res) => {
       ${resumeBodyHtml}
     </div>`;
 
-    // CRITICAL FIX: If JD is too short (< 20 chars), skip AI and use JD-derived fallbacks
-    const jdTooShort = !jd || jd.trim().length < 20;
+    // CRITICAL FIX: If JD is too short (< 50 chars), EXPAND it by inferring role requirements
+    const jdTooShort = !jd || jd.trim().length < 50;
+    let expandedJD = jd;
+    
+    if (jdTooShort && jd) {
+      // Infer full requirements based on role keywords
+      const role = jd.trim().toLowerCase();
+      if (role.includes('software') || role.includes('developer')) {
+        expandedJD = `${jd} with experience in Python, Java, JavaScript, REST APIs, SQL databases, Git version control, and Agile methodology. Strong problem-solving and communication skills required.`;
+      } else if (role.includes('data')) {
+        expandedJD = `${jd} with proficiency in Python, SQL, Pandas, NumPy, Tableau, Excel, and data visualization. Strong analytical and communication skills.`;
+      } else if (role.includes('web')) {
+        expandedJD = `${jd} with knowledge of HTML, CSS, JavaScript, React, Node.js, REST APIs, MongoDB, and Git.`;
+      } else if (role.includes('java')) {
+        expandedJD = `${jd} with Spring Boot, Hibernate, MySQL, REST APIs, Maven, Jenkins, and Git experience.`;
+      } else {
+        expandedJD = `${jd} with relevant technical skills, programming languages, frameworks, databases, and strong problem-solving abilities.`;
+      }
+    }
 
-    if (Object.keys(aiPrompts).length > 0 && jd && !jdTooShort) {
+    if (Object.keys(aiPrompts).length > 0 && expandedJD) {
         // INTELLIGENT RESUME ENGINE PROMPT
         const intelligentPrompt = `
 You are an EXPERT RESUME INTELLIGENCE ENGINE.
 
 PRIMARY OBJECTIVE: Generate professional, ATS-friendly, logically connected resume content.
 
-JOB ROLE/DESCRIPTION: "${jd.slice(0, 800)}"
+JOB ROLE/DESCRIPTION: "${expandedJD.slice(0, 1000)}"
 USER PROFILE: ${JSON.stringify(profile).slice(0, 1000)}
 
 CRITICAL RULES (MANDATORY):
 1. SUMMARY IS MANDATORY - Never skip. Must align with job role and showcase skills/impact.
 2. DO NOT COPY VERBATIM from job description. INFER skills intelligently based on role.
-3. EVERYTHING MUST BE CONNECTED: Skills → Projects → Experience → Certifications.
-4. Projects MUST use the technical skills listed.
-5. Certifications MUST match skills.
-6. Achievements MUST result from projects/experience.
+3. EVERYTHING MUST BE CONNECTED: Skills → Projects → Experience → Certifications → Achievements.
+4. Projects MUST use the technical skills listed AND solve real problems.
+5. Certifications MUST match the technical skills and be realistic (e.g., AWS Certified, Oracle Java SE, PCEP Python).
+6. Achievements MUST be specific, measurable, and result from projects/skills (e.g., "Improved API response time by 30%").
 7. Generate realistic, entry-level friendly content for freshers.
+8. NO PLACEHOLDERS like "Skill 3", "Skill 4" - always generate real skill names.
+9. Certifications must be FULL PROPER NAMES (e.g., "AWS Certified Developer – Associate", not "Certified X Professional").
+10. Projects must have REAL technology stacks and outcomes.
 
 TASK: Return valid JSON with these exact keys: ${Object.keys(aiPrompts).join(', ')}
 
 INSTRUCTIONS:
 ${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
 
-ADDITIONAL INTELLIGENCE:
-- For Technical Skills: Infer core technologies for "${jd.slice(0, 50)}" role (programming languages, frameworks, databases, tools)
-- For Projects: Create 2 realistic projects that USE the technical skills and solve real problems
-- For Certifications: Suggest role-appropriate certifications (e.g., AWS, Python, Java SE)
-- For Achievements: Make them measurable and connected to skills/projects
-- For Summary: Write 3-4 sentences highlighting skills, projects, and eagerness to contribute
+INTELLIGENCE GUIDELINES:
+- Technical Skills: Infer 8-12 real technologies for this role (Python, React, SQL, Docker, etc.)
+- Projects: Create 2 projects with format: "<b>Project Name:</b> Built using [Tech Stack] to [Problem]. Achieved [Result]. | <b>Project 2:</b> ..."
+- Certifications: Real certification names like "AWS Certified Cloud Practitioner", "Oracle Certified Java SE 11 Developer"
+- Achievements: Specific results like "Reduced database query time by 40%", "Automated testing workflow saving 15 hours/week"
 
-OUTPUT: Valid JSON only. No explanations. No markdown.
+OUTPUT: Valid JSON only. No explanations. No markdown. NO placeholders.
 `;
 
         try {
