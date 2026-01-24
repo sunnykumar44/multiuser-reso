@@ -1,30 +1,45 @@
 const { saveHistory } = require("./firebase");
 
-// --- HELPER 1: DYNAMIC KEYWORD EXTRACTOR (The Safety Net) ---
-// If AI fails, this extracts real words from YOUR JD string.
+// --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
+// Extracts meaningful technical and soft skills from JD
 function extractKeywordsFromJD(jd) {
-  if (!jd) return ["Communication", "Problem Solving", "Agile"];
+  if (!jd || jd.trim().length < 5) return ["Technical", "Problem Solving", "Communication", "Teamwork", "Leadership", "Analytical"];
   
   const stopWords = new Set([
     "and", "the", "for", "with", "ing", "to", "in", "a", "an", "of", "on", "at", "by", "is", "are", 
-    "was", "were", "be", "been", "job", "role", "work", "experience", "skills", "candidate", "ability", 
-    "knowledge", "looking", "seeking", "must", "have", "will", "can", "good", "strong", "years", "description"
+    "was", "were", "be", "been", "job", "role", "work", "experience", "candidate", "ability", 
+    "knowledge", "looking", "seeking", "must", "have", "will", "can", "good", "strong", "years", 
+    "description", "looking", "required", "preferred", "should", "responsibilities", "requirements"
   ]);
 
   // Clean and split text
-  const words = jd.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/);
-  const uniqueWords = new Set();
-  const meaningfulWords = [];
-
+  const text = jd.toLowerCase();
+  const words = text.replace(/[^a-z0-9\s+#\.]/g, ' ').split(/\s+/);
+  
+  // Word frequency counting
+  const wordCount = {};
   words.forEach(w => {
-    if (w.length > 3 && !stopWords.has(w) && !uniqueWords.has(w)) {
-      uniqueWords.add(w);
-      // Capitalize first letter
-      meaningfulWords.push(w.charAt(0).toUpperCase() + w.slice(1));
+    if (w.length > 2 && !stopWords.has(w)) {
+      wordCount[w] = (wordCount[w] || 0) + 1;
     }
   });
 
-  return meaningfulWords.slice(0, 12); // Return top 12 keywords
+  // Sort by frequency and capitalize
+  const sortedWords = Object.entries(wordCount)
+    .sort((a, b) => b[1] - a[1])
+    .map(([word]) => word.charAt(0).toUpperCase() + word.slice(1))
+    .filter((word, idx, arr) => arr.indexOf(word) === idx); // unique
+
+  // If we got less than 6, pad with common soft skills
+  const commonSkills = ["Communication", "Problem Solving", "Teamwork", "Leadership", "Time Management", "Analytical Thinking", "Adaptability", "Initiative"];
+  const result = [...sortedWords];
+  
+  for (const skill of commonSkills) {
+    if (result.length >= 18) break;
+    if (!result.includes(skill)) result.push(skill);
+  }
+
+  return result.slice(0, 18); // Return top 18 keywords
 }
 
 // --- HELPER 2: DYNAMIC FALLBACK GENERATOR (100% JD-DERIVED) ---
@@ -36,10 +51,14 @@ function getSmartFallback(section, jd) {
   const secondKeyword = dynamicKeywords[1] || jd.trim().split(' ')[1] || "Skills";
   const thirdKeyword = dynamicKeywords[2] || "Development";
 
-  // A. SKILLS - ALWAYS use JD keywords
+  // A. SKILLS - ALWAYS use JD keywords, minimum 6
   if (section === 'skills') {
-     // Return top 12 keywords from JD directly
-     return dynamicKeywords.slice(0, 12);
+     // Return top 15 keywords from JD directly, ensuring minimum of 6
+     const skills = dynamicKeywords.slice(0, 15);
+     while (skills.length < 6) {
+       skills.push(`Skill ${skills.length + 1}`);
+     }
+     return skills;
   }
 
   // B. CERTIFICATIONS - Use JD keywords
@@ -215,12 +234,21 @@ module.exports = async (req, res) => {
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `Extract 12-15 technical skills STRICTLY from this JD: "${jd.slice(0, 600)}". User has: ${userSkills.join(',')}. Add them ONLY if relevant to JD. Return comma-separated list of ONLY JD-relevant skills.`;
+            aiPrompts[pid] = `Extract 10-15 technical skills STRICTLY from this JD: "${jd.slice(0, 600)}". User has: ${userSkills.join(',')}. Add them ONLY if mentioned in JD. Return comma-separated list. Minimum 6 skills.`;
             
-            // DYNAMIC FALLBACK: Use JD keywords as skills
+            // DYNAMIC FALLBACK: Use JD keywords as skills, minimum 6
             const dynamicSkills = getSmartFallback('skills', jd);
             const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
-            const combined = [...new Set([...relevantUserSkills, ...dynamicSkills])].slice(0, 15);
+            let combined = [...new Set([...relevantUserSkills, ...dynamicSkills])];
+            
+            // Ensure minimum 6 skills
+            while (combined.length < 6) {
+              const extra = extractKeywordsFromJD(jd)[combined.length];
+              if (extra && !combined.includes(extra)) combined.push(extra);
+              else break;
+            }
+            
+            combined = combined.slice(0, 15);
             aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
@@ -301,10 +329,14 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `List 6 character traits that match this JD: "${jd.slice(0,200)}". Comma-separated. Use ONLY JD-relevant traits.`;
-            // Dynamic Traits from JD Keywords
-            const kws = extractKeywordsFromJD(jd).slice(0, 6);
-            const fallbackStr = kws.length ? kws.join(' | ') : extractKeywordsFromJD(jd).slice(0,4).join(' | ');
+            aiPrompts[pid] = `List 6-8 character traits that match this JD: "${jd.slice(0,200)}". Comma-separated. Use ONLY JD-relevant traits. Minimum 6.`;
+            
+            // Dynamic Traits from JD Keywords - ensure minimum 6
+            let kws = extractKeywordsFromJD(jd).slice(0, 8);
+            while (kws.length < 6) {
+              kws.push(`Trait ${kws.length + 1}`);
+            }
+            const fallbackStr = kws.join(' | ');
             aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
