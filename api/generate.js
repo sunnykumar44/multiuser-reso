@@ -5,6 +5,20 @@ function escapeHtml(s = "") {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Extract important keywords from JD to force AI to focus
+function extractKeywords(text, limit = 8) {
+  if (!text || typeof text !== 'string') return [];
+  const stop = new Set(['the','and','to','a','an','of','in','for','with','on','as','is','are','be','by','at','from','that','this','will','have','has','role','responsibilities']);
+  const toks = text.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(Boolean);
+  const counts = {};
+  for (const t of toks) {
+    if (t.length < 3) continue;
+    if (stop.has(t)) continue;
+    counts[t] = (counts[t]||0)+1;
+  }
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,limit).map(x=>x[0]);
+}
+
 function getSmartFallback(section, jd) {
   const job = String(jd || "").toLowerCase();
   
@@ -97,8 +111,8 @@ async function callGeminiFlash(promptText) {
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
-      temperature: 0.7, // Lower temperature = Faster response
-      maxOutputTokens: 2048, // Reduced to ensure <10s execution
+      temperature: 0.25, // low creativity to stick to JD
+      maxOutputTokens: 2048,
       responseMimeType: "application/json"
     }
   };
@@ -145,6 +159,10 @@ module.exports = async (req, res) => {
     const aiTypes = {}; 
     let sectionCounter = 0;
 
+    // compute JD keywords once and use in prompts
+    const jdKeywords = extractKeywords(jd || '', 8);
+    const jdKeyline = jdKeywords.length ? `JD keywords: ${jdKeywords.join(', ')}.` : '';
+
     const seen = new Set();
     const sectionsToRender = [];
     const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Certifications', 'Achievements'];
@@ -176,7 +194,7 @@ module.exports = async (req, res) => {
             const original = profile.summary || "";
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `Write a 3-sentence summary for a Fresher '${jd.slice(0,50)}' role. Input: "${original}". STRICTLY tailor to JD keywords.`;
+            aiPrompts[pid] = `Write a 3-sentence summary for a Fresher '${jd.slice(0,50)}' role. Input: "${original}". STRICTLY tailor to JD keywords. ${jdKeyline} Avoid generic, unrelated content.`;
             aiFallbacks[pid] = `<p>Aspiring ${jd.slice(0,30)} with strong academic background and relevant project experience.</p>`;
             aiTypes[pid] = 'summary';
         }
@@ -185,7 +203,7 @@ module.exports = async (req, res) => {
             const pid = `sec_${sectionCounter++}`;
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `List 10-12 technical skills STRICTLY for JD: "${jd.slice(0, 300)}". Include user skills (${userSkills.join(',')}) if relevant. Return comma-separated list.`;
+            aiPrompts[pid] = `List 10-12 technical skills STRICTLY for JD: "${jd.slice(0, 300)}". Include user skills (${userSkills.join(',')}). ${jdKeyline} Return comma-separated list; avoid generic skills not relevant to JD.`;
             const fallbackList = getSmartFallback('skills', jd);
             const combined = [...new Set([...userSkills, ...fallbackList])].slice(0, 10);
             aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
@@ -216,7 +234,7 @@ module.exports = async (req, res) => {
                         ${companyName ? `<span class="resume-company">${escapeHtml(companyName)}</span>` : ''}
                         <ul id="${pid}">[${pid}]</ul>
                       </div>`;
-                    aiPrompts[pid] = `Rewrite experience: "${item.bullets}". Write 2 concise, metric-driven sentences tailored to JD. Pipe-separated.`;
+                    aiPrompts[pid] = `Rewrite experience: "${item.bullets}". Write 2 concise, metric-driven sentences tailored to JD. Pipe-separated. ${jdKeyline} Use JD context and do not invent unrelated domains.`;
                     aiFallbacks[pid] = `<li>${escapeHtml(item.key)}</li>`;
                     aiTypes[pid] = 'list';
                 }
@@ -229,9 +247,9 @@ module.exports = async (req, res) => {
              const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
              if (projSec && projSec.items && projSec.items.length) {
                   const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
-                  aiPrompts[pid] = `Rewrite 2 projects: "${inputs}". Format: "<b>Title:</b> Desc | <b>Title:</b> Desc". Tailor to JD.`;
+                  aiPrompts[pid] = `Rewrite 2 projects: "${inputs}". Format: "<b>Title:</b> Desc | <b>Title:</b> Desc". Tailor strictly to JD. ${jdKeyline}`;
              } else {
-                  aiPrompts[pid] = `Invent 2 academic projects for '${jd.slice(0,50)}'. Format: "<b>Title:</b> Desc | <b>Title:</b> Desc".`;
+                  aiPrompts[pid] = `Invent 2 academic projects for '${jd.slice(0,50)}'. Format: "<b>Title:</b> Desc | <b>Title:</b> Desc". ${jdKeyline} Ensure projects are relevant to the JD.`;
              }
              aiFallbacks[pid] = getSmartFallback('projects', jd).split('|').map(p => `<li>${p.trim()}</li>`).join('');
              aiTypes[pid] = 'list';
@@ -248,7 +266,7 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">Certifications</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            aiPrompts[pid] = `Invent 2 certifications for '${jd.slice(0,50)}'. Format: "Cert Name | Cert Name".`;
+            aiPrompts[pid] = `Invent 2 certifications for '${jd.slice(0,50)}'. Format: "Cert Name | Cert Name". ${jdKeyline} Prefer certifications relevant to JD.`;
             aiFallbacks[pid] = getSmartFallback('certifications', jd).split('|').map(c => `<li>${c.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
@@ -256,7 +274,7 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">Achievements</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            aiPrompts[pid] = `Invent 2 achievements for '${jd.slice(0,50)}'. Pipe-separated.`;
+            aiPrompts[pid] = `Invent 2 achievements for '${jd.slice(0,50)}'. Pipe-separated. ${jdKeyline} Ensure achievements sound relevant to the JD.`;
             aiFallbacks[pid] = getSmartFallback('achievements', jd).split('|').map(a => `<li>${a.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
@@ -264,7 +282,7 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `List 6 character traits for '${jd.slice(0,50)}'. Comma-separated.`;
+            aiPrompts[pid] = `List 6 character traits for '${jd.slice(0,50)}'. Comma-separated. ${jdKeyline} Prefer traits that align with JD competencies.`;
             aiFallbacks[pid] = "Fast Learner | Adaptable | Reliable".split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
