@@ -94,24 +94,16 @@ function extractKeywordsFromJD(jd, type = 'all') {
 // --- HELPER 2: DYNAMIC FALLBACK GENERATOR (100% JD-DERIVED) ---
 function getSmartFallback(section, jd) {
   const rolePreset = getRolePreset(jd);
-  // Skills: still keyword-derived but padded from preset
+  // Skills: keyword-derived + shuffled preset padding
   if (section === 'skills') {
-    const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 15);
-    for (const p of (rolePreset.skills || [])) { if (skills.length >= 10) break; if (!skills.includes(p)) skills.push(p); }
+    let skills = extractKeywordsFromJD(jd, 'technical').slice(0, 6);
+    const pool = shuffle((rolePreset.skills || []).slice());
+    for (const p of pool) { if (skills.length >= 12) break; if (!skills.includes(p)) skills.push(p); }
     return skills;
   }
-  // Certifications: role-aligned randomized
-  if (section === 'certifications') {
-    return dynamicCerts(rolePreset).join(' | ');
-  }
-  // Projects: randomized preset projects
-  if (section === 'projects') {
-    return dynamicProjects(rolePreset).join(' | ');
-  }
-  // Achievements: randomized and measurable
-  if (section === 'achievements') {
-    return dynamicAchievements(rolePreset).join(' | ');
-  }
+  if (section === 'certifications') return dynamicCerts(rolePreset).join(' | ');
+  if (section === 'projects') return dynamicProjects(rolePreset).join(' | ');
+  if (section === 'achievements') return dynamicAchievements(rolePreset).join(' | ');
   return "";
 }
 
@@ -473,8 +465,8 @@ module.exports = async (req, res) => {
                         ${companyName ? `<span class="resume-company">${escapeHtml(companyName)}</span>` : ''}
                         <ul id="${pid}">[${pid}]</ul>
                       </div>`;
-                    aiPrompts[pid] = `Rewrite experience: "${item.bullets}". Write 2 concise sentences using keywords: "${finalJD.slice(0,200)}...". Pipe-separated.`;
-                    aiFallbacks[pid] = `<li>${escapeHtml(item.key)}</li>`;
+                    aiPrompts[pid] = `MANDATORY: Rewrite experience bullet for role "${item.key}" to include keywords from: "${finalJD.slice(0,200)}". Format: 2 concise Pipe-separated bullets showing impact.`;
+                    aiFallbacks[pid] = `<li>${escapeHtml(dynamicExperienceBullet(item.key, rolePreset))}</li>`;
                     aiTypes[pid] = 'list';
                     aiLabels[pid] = 'Work Experience';
                  }
@@ -740,4 +732,11 @@ function dynamicTraits(finalJD) {
   const base = extractKeywordsFromJD(finalJD, 'soft');
   const extras = ['Ownership','Attention to Detail','Curiosity','Stakeholder Communication','Time Management','Learning Agility'];
   return shuffle([...new Set(base.concat(extras))]).slice(0, 6);
+}
+
+function dynamicExperienceBullet(role, rolePreset) {
+  const actions = ['Collaborated on', 'Developed', 'Optimized', 'Managed', 'Assisted with', 'Implemented'];
+  const techs = shuffle((rolePreset.skills || []).slice()).slice(0, 2);
+  const outcomes = ['improving workflow efficiency by ~15%', 'reducing processing latency', 'enhancing system reliability', 'supporting data-driven decision making', 'streamlining internal processes'];
+  return `${randomFrom(actions)} ${role} components using ${techs.join(' and ')}, ${randomFrom(outcomes)}.`;
 }
