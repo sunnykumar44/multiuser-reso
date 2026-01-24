@@ -275,7 +275,43 @@ function isLikelyTechnical(token) {
   return false;
 }
 
-async function callGeminiFlash(promptText) {
+function randomFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function randomPercent(min = 10, max = 40) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+// Augment project text by inserting a role-relevant tech and a small measurable result
+function augmentProjectIfNeeded(text, rolePreset) {
+  // if text already mentions techs, return
+  if (isLikelyTechnical(text)) return text;
+  const tech = randomFrom(rolePreset.skills || ['Python']);
+  const pct = randomPercent();
+  return `${text.trim()} Built using ${tech}. Achieved ~${pct}% improvement in relevant metric.`;
+}
+
+// Augment a certification list to ensure real certs
+function augmentCerts(parts, rolePreset) {
+  const out = [];
+  for (const p of parts) {
+    const hasKnown = ['AWS','Oracle','PCEP','Microsoft','ISTQB','Confluent','Google'].some(t => p.toUpperCase().includes(t));
+    if (hasKnown) out.push(p);
+    else out.push(randomFrom(rolePreset.certs || ['PCEP – Certified Entry-Level Python Programmer']));
+  }
+  // ensure two certs
+  while (out.length < 2) out.push(randomFrom(rolePreset.certs || ['PCEP – Certified Entry-Level Python Programmer']));
+  return out.slice(0,2);
+}
+
+// Augment achievements to include measurable numbers
+function augmentAchievements(parts, rolePreset) {
+  const out = [];
+  for (const p of parts) {
+    if (/%|\b(reduc|improv|increas|save|autom|improved|reduced)\b/i.test(p)) out.push(p);
+    else out.push(`${p} Improved performance by ${randomPercent()}%.`);
+  }
+  while (out.length < 2) out.push(randomFrom(rolePreset.achievements || ['Delivered project demonstrating technical fundamentals']));
+  return out.slice(0,2);
+}
+
+async function callGeminiFlash(promptText, opts = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
   
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
@@ -283,8 +319,8 @@ async function callGeminiFlash(promptText) {
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
-      temperature: 0.6, // Low temp for focused adherence to JD
-      maxOutputTokens: 2048, 
+      temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.6, // allow override
+      maxOutputTokens: opts.maxOutputTokens || 2048,
       responseMimeType: "application/json"
     }
   };
@@ -526,135 +562,114 @@ module.exports = async (req, res) => {
 
     // 3. CALL AI (finalJD already declared above)
     if (Object.keys(aiPrompts).length > 0 && finalJD) {
-        // INTELLIGENT RESUME ENGINE PROMPT
-        const intelligentPrompt = `
-You are an EXPERT RESUME INTELLIGENCE ENGINE.
-
-PRIMARY OBJECTIVE: Generate professional, ATS-friendly, logically connected resume content.
-
-JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1000)}"
-USER PROFILE: ${JSON.stringify(profile).slice(0, 1000)}
-
-CRITICAL RULES (MANDATORY):
-1. SUMMARY IS MANDATORY - Never skip. Must align with job role and showcase skills/impact.
-2. DO NOT COPY VERBATIM from job description. INFER skills intelligently based on role.
-3. EVERYTHING MUST BE CONNECTED: Skills → Projects → Experience → Certifications → Achievements.
-4. Projects MUST use the technical skills listed AND solve real problems.
-5. Certifications MUST match the technical skills and be realistic (e.g., AWS Certified, Oracle Java SE, PCEP Python).
-6. Achievements MUST be specific, measurable, and result from projects/skills (e.g., "Improved API response time by 30%").
-7. Generate realistic, entry-level friendly content for freshers.
-8. NO PLACEHOLDERS like "Skill 3", "Skill 4" - always generate real skill names.
-9. Certifications must be FULL PROPER NAMES (e.g., "AWS Certified Developer – Associate", not "Certified X Professional").
-10. Projects must have REAL technology stacks and outcomes.
-
-TASK: Return valid JSON with these exact keys: ${Object.keys(aiPrompts).join(', ')}
-
-INSTRUCTIONS:
-${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
-
-INTELLIGENCE GUIDELINES:
-- Technical Skills: Infer 8-12 real technologies for this role (Python, React, SQL, Docker, etc.)
-- Projects: Create 2 projects with format: "<b>Project Name:</b> Built using [Tech Stack] to [Problem]. Achieved [Result]. | <b>Project 2:</b> ..."
-- Certifications: Real certification names like "AWS Certified Cloud Practitioner", "Oracle Certified Java SE 11 Developer"
-- Achievements: Specific results like "Reduced database query time by 40%", "Automated testing workflow saving 15 hours/week"
-
-OUTPUT: Valid JSON only. No explanations. No markdown. NO placeholders.
-`;
+        // try AI with retries for short JD to encourage variability
+        const temps = (finalJD && finalJD.trim().length < 50) ? [0.6, 0.85] : [0.6];
+        let aiData = null;
+        let lastError = null;
+        for (const t of temps) {
+            try {
+                const seed = Math.random().toString(36).substring(2,8);
+                const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed} (Produce a realistic, role-aligned but distinct variation)`;
+                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, maxOutputTokens: 3000 });
+                try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); } catch (e) { aiData = null; console.warn('AI JSON parse failed on attempt', t, e); }
+                if (aiData) break;
+            } catch (e) {
+                lastError = e;
+                console.warn('AI attempt failed at temp', t, e);
+            }
+        }
 
         try {
-            const aiJsonText = await callGeminiFlash(intelligentPrompt);
-            let aiData = {};
-            try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); } catch (e) {
-                console.error('AI JSON parse failed:', e);
-            }
+            if (!aiData) throw lastError || new Error('No AI data returned');
 
             Object.keys(aiPrompts).forEach(pid => {
                 let val = aiData[pid];
                 const type = aiTypes[pid];
                 const label = aiLabels[pid] || '';
-                // process AI output
-                if (val && typeof val === 'string' && val.length > 2) {
-                    // SKILLS (chips)
-                    if (type === 'chips' && label === 'Technical Skills') {
-                        const parts = val.split(/[,|\n]+/).map(s=>s.trim()).filter(Boolean);
-                        const techCount = parts.filter(p => isLikelyTechnical(p)).length;
-                        if (techCount < 6) {
-                            // fallback to rolePreset skills
-                            const chips = (rolePreset.skills || []).slice(0,8).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                        } else {
-                            const chips = parts.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                        }
-                    }
-                    // TRAITS (chips but soft skills)
-                    else if (type === 'chips' && label && label.toLowerCase().includes('character')) {
-                        const parts = val.split(/[,|\n]+/).map(s=>s.trim()).filter(Boolean);
-                        const soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,8);
-                        while (soft.length < 6) {
-                            const more = extractKeywordsFromJD(finalJD, 'soft') || [];
-                            for (const m of more) { if (!soft.includes(m)) soft.push(m); if (soft.length>=6) break; }
-                            break;
-                        }
-                        const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    }
-                    // LIST (projects / certs / achievements)
-                    else if (type === 'list') {
-                        const parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                        if (label === 'Projects') {
-                            const valid = parts.every(p => isLikelyTechnical(p) || rolePreset.projects.some(pr => p.toLowerCase().includes(pr.split(':')[0].toLowerCase())));
-                            if (!valid) {
-                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, (rolePreset.projects || []).slice(0,2).map(p=>`<li>${p}</li>`).join(''));
-                            } else {
-                                const lis = parts.map(b => `<li>${b}</li>`).join('');
-                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                            }
-                        } else if (label === 'Certifications') {
-                            const CERT_TOKENS = ['AWS','Oracle','PCEP','Microsoft','ISTQB','Confluent','Google'];
-                            const valid = parts.every(p => CERT_TOKENS.some(t => p.toUpperCase().includes(t.toUpperCase())) || p.split(' ').length>2);
-                            if (!valid) {
-                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, (rolePreset.certs || []).slice(0,2).map(c=>`<li>${c}</li>`).join(''));
-                            } else {
-                                const lis = parts.map(b => `<li>${b}</li>`).join('');
-                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                            }
-                        } else if (label === 'Achievements') {
-                            const ACH_CHECK = parts.every(p => /%|\b(reduc|improv|increas|save|reduc|improv|autom|improved)\b/i.test(p) || p.split(' ').length>4);
-                            if (!ACH_CHECK) {
-                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, (rolePreset.achievements || []).slice(0,2).map(a=>`<li>${a}</li>`).join(''));
-                            } else {
-                                const lis = parts.map(b => `<li>${b}</li>`).join('');
-                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                            }
-                        } else {
-                            const lis = parts.map(b => `<li>${b}</li>`).join('');
-                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                        }
-                    }
-                    else if (type === 'summary') {
-                        // ensure summary mentions at least one role skill
-                        const s = val;
-                        const techs = rolePreset.skills || [];
-                        const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
-                        if (!hasTech && techs.length) {
-                            const augmented = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
-                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(augmented)}</p>`);
-                        } else {
-                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
-                        }
-                    }
-                    else {
-                        // default insertion
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                    }
-                } else {
-                    // AI didn't return this key, use fallback
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+                if (!val || typeof val !== 'string' || val.trim().length < 2) {
+                    const dynamic = dynamicFallbackFor(type, label, rolePreset, Array.isArray(profile.skills) ? profile.skills : []);
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+                    return;
                 }
+
+                // SKILLS: augment instead of replacing completely
+                if (type === 'chips' && label === 'Technical Skills') {
+                    let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+                    // keep only likely technical tokens, else augment
+                    let techParts = parts.filter(p => isLikelyTechnical(p));
+                    // also allow rolePreset matches
+                    techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
+                    // add random preset skills to reach minimum
+                    while (techParts.length < 8) {
+                        const pick = randomFrom(rolePreset.skills || []);
+                        if (!techParts.includes(pick)) techParts.push(pick);
+                    }
+                    const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                    return;
+                }
+
+                // TRAITS (soft chips)
+                if (type === 'chips' && label && label.toLowerCase().includes('character')) {
+                    let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+                    let soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,8);
+                    const extras = extractKeywordsFromJD(finalJD, 'soft');
+                    let idx = 0;
+                    while (soft.length < 6 && idx < extras.length) { if (!soft.includes(extras[idx])) soft.push(extras[idx]); idx++; }
+                    const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                    return;
+                }
+
+                // PROJECTS
+                if (type === 'list' && label === 'Projects') {
+                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
+                    parts = parts.map(p => { if (isLikelyTechnical(p)) return p; return augmentProjectIfNeeded(p, rolePreset); });
+                    const lis = parts.map(b => `<li>${b}</li>`).join('');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                    return;
+                }
+
+                // CERTIFICATIONS
+                if (type === 'list' && label === 'Certifications') {
+                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
+                    const certs = augmentCerts(parts, rolePreset);
+                    const lis = certs.map(b => `<li>${b}</li>`).join('');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                    return;
+                }
+
+                // ACHIEVEMENTS
+                if (type === 'list' && label === 'Achievements') {
+                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
+                    const achs = augmentAchievements(parts, rolePreset);
+                    const lis = achs.map(b => `<li>${b}</li>`).join('');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                    return;
+                }
+
+                // SUMMARY - ensure contains tech
+                if (type === 'summary') {
+                    let s = val.trim();
+                    const techs = rolePreset.skills || [];
+                    const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
+                    if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
+                    return;
+                }
+
+                // Default for list/others
+                if (type === 'list') {
+                    const lis = val.split('|').map(b => `<li>${b.trim()}</li>`).join('');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                    return;
+                }
+
+                // final fallback
+                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
             });
         } catch (e) {
-            console.error('AI call failed:', e);
+            console.error('AI processing failed:', e);
             Object.keys(aiPrompts).forEach(pid => htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]));
         }
     } else {
@@ -669,3 +684,35 @@ OUTPUT: Valid JSON only. No explanations. No markdown. NO placeholders.
     return res.status(500).json({ error: err.message });
   }
 };
+
+function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+
+function dynamicFallbackFor(type, label, rolePreset, userSkills = []) {
+  if (type === 'chips' && label === 'Technical Skills') {
+    const pool = [...new Set([...(userSkills||[]), ...(rolePreset.skills||[])])];
+    const chosen = shuffle(pool).slice(0, 10);
+    return chosen.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+  }
+  if (type === 'chips' && label && label.toLowerCase().includes('character')) {
+    const soft = extractKeywordsFromJD(finalJD, 'soft');
+    const chosen = shuffle(soft.concat(['Communication','Teamwork','Problem Solving'])).slice(0,6);
+    return chosen.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+  }
+  if (type === 'list' && label === 'Projects') {
+    const pool = rolePreset.projects || [];
+    const chosen = shuffle(pool.slice()).slice(0,2).map(p => augmentProjectIfNeeded(p, rolePreset));
+    return chosen.map(p=>`<li>${p}</li>`).join('');
+  }
+  if (type === 'list' && label === 'Certifications') {
+    const pool = rolePreset.certs || [];
+    const chosen = shuffle(pool.slice()).slice(0,2);
+    return chosen.map(c=>`<li>${escapeHtml(c)}</li>`).join('');
+  }
+  if (type === 'list' && label === 'Achievements') {
+    const pool = rolePreset.achievements || [];
+    const chosen = shuffle(pool.slice()).slice(0,2).map(a => a.includes('%') ? a : `${a} (${randomPercent()}% improvement)`);
+    return chosen.map(a=>`<li>${escapeHtml(a)}</li>`).join('');
+  }
+  // default fallback
+  return '';
+}
