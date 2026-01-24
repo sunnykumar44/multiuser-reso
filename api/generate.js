@@ -93,43 +93,25 @@ function extractKeywordsFromJD(jd, type = 'all') {
 
 // --- HELPER 2: DYNAMIC FALLBACK GENERATOR (100% JD-DERIVED) ---
 function getSmartFallback(section, jd) {
-  const job = String(jd || "").toLowerCase();
-  // Extract real keywords from the JD input
-  const dynamicKeywords = extractKeywordsFromJD(jd);
-  const mainKeyword = dynamicKeywords[0] || jd.trim().split(' ')[0] || "Technical";
-  const secondKeyword = dynamicKeywords[1] || jd.trim().split(' ')[1] || "Skills";
-  const thirdKeyword = dynamicKeywords[2] || "Development";
-
-  // A. SKILLS - ALWAYS use JD TECHNICAL keywords, minimum 6
+  const rolePreset = getRolePreset(jd);
+  // Skills: still keyword-derived but padded from preset
   if (section === 'skills') {
-     // Return top technical keywords from JD directly
-     const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 15);
-     // If not enough technical keywords, pad from role preset
-     if (skills.length < 6) {
-       const preset = getRolePreset(jd).skills || [];
-       for (const p of preset) {
-         if (skills.length >= 6) break;
-         if (!skills.includes(p)) skills.push(p);
-       }
-     }
-     return skills;
+    const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 15);
+    for (const p of (rolePreset.skills || [])) { if (skills.length >= 10) break; if (!skills.includes(p)) skills.push(p); }
+    return skills;
   }
-
-  // B. CERTIFICATIONS - Use JD keywords
+  // Certifications: role-aligned randomized
   if (section === 'certifications') {
-    return `Certified ${mainKeyword} Professional | ${secondKeyword} Specialist Certification`;
+    return dynamicCerts(rolePreset).join(' | ');
   }
-
-  // C. PROJECTS - Use JD keywords
+  // Projects: randomized preset projects
   if (section === 'projects') {
-     return `<b>${mainKeyword} ${thirdKeyword} System:</b> Implemented ${mainKeyword} features using ${secondKeyword} technologies. | <b>${secondKeyword} Optimization Tool:</b> Built ${thirdKeyword} solution for ${mainKeyword} processing.`;
+    return dynamicProjects(rolePreset).join(' | ');
   }
-
-  // D. ACHIEVEMENTS - Use JD keywords
+  // Achievements: randomized and measurable
   if (section === 'achievements') {
-      return `Improved ${mainKeyword} performance by 25% through ${secondKeyword} optimization. | Recognized for ${thirdKeyword} excellence in ${mainKeyword} implementation.`;
+    return dynamicAchievements(rolePreset).join(' | ');
   }
-
   return "";
 }
 
@@ -151,7 +133,7 @@ function canonicalSectionName(name) {
 }
 
 // --- CONSTANTS ---
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY;
 
 const RESUME_CSS = `
   <style>
@@ -191,6 +173,15 @@ const RESUME_CSS = `
 
 // Role presets provide realistic, role-aligned seeds when JD is sparse
 const ROLE_PRESETS = {
+  'data engineer': {
+    skills: ['Python','SQL','Apache Spark','Airflow','ETL','Data Warehousing','BigQuery','AWS S3','Docker','Git'],
+    projects: [
+      '<b>Batch ETL Pipeline:</b> Built a Python + Airflow pipeline to ingest, validate, and load datasets into a warehouse. Improved data freshness by 30% and reduced manual effort.',
+      '<b>Spark Transformations:</b> Implemented Spark jobs for large-scale transformations and partitioning to reduce run time by 35%.'
+    ],
+    certs: ['Google Cloud Digital Leader','Microsoft Certified: Azure Data Fundamentals'],
+    achievements: ['Reduced pipeline failure rate by 25% via validation and retries','Optimized Spark transformations to cut processing time by 35%']
+  },
   'software engineer': {
     skills: ['Python','Java','JavaScript','REST APIs','SQL','Git','Docker','Linux','Microservices'],
     projects: [
@@ -257,6 +248,7 @@ function getRolePreset(jd) {
     if (text.includes(key) || text.includes(key.split(' ')[0])) return ROLE_PRESETS[key];
   }
   // fallback heuristics
+  if (text.includes('data engineer') || (text.includes('data') && (text.includes('pipeline') || text.includes('etl') || text.includes('warehouse')))) return ROLE_PRESETS['data engineer'];
   if (text.includes('data')) return ROLE_PRESETS['data analyst'];
   if (text.includes('middleware') || text.includes('broker')) return ROLE_PRESETS['middleware'];
   if (text.includes('automation') || text.includes('qa') || text.includes('testing')) return ROLE_PRESETS['automation'];
@@ -426,7 +418,7 @@ module.exports = async (req, res) => {
             // Fallback uses first JD keyword
             const kw = extractKeywordsFromJD(jd, 'technical')[0] || jd.trim().split(' ')[0] || "Technical";
             const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 3).join(', ');
-            aiFallbacks[pid] = `<p>Motivated ${kw} professional with strong academic foundation and hands-on project experience in ${skills}. Demonstrated ability to apply technical knowledge to real-world problems through academic projects. Eager to contribute to organizational success and grow in a challenging environment.</p>`;
+            aiFallbacks[pid] = `<p>${escapeHtml(dynamicSummary(rolePreset, finalJD))}</p>`;
             aiTypes[pid] = 'summary';
             aiLabels[pid] = 'Summary';
          }
@@ -439,7 +431,7 @@ module.exports = async (req, res) => {
             aiPrompts[pid] = `INTELLIGENT SKILL INFERENCE: Based on role "${finalJD.slice(0, 100)}", infer 10-15 TECHNICAL skills that are: (1) Standard for this role (2) Include programming languages, frameworks, databases, tools (3) NOT copied verbatim from JD (4) Realistic for entry-level. User has: ${userSkills.join(',')}. Include them if relevant. Return comma-separated. Minimum 8 technical skills.`;
             
             // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 8
-            const dynamicSkills = getSmartFallback('skills', jd);
+            const dynamicSkills = getSmartFallback('skills', finalJD);
             const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
             let combined = [...new Set([...relevantUserSkills, ...dynamicSkills])];
             
@@ -538,11 +530,7 @@ module.exports = async (req, res) => {
             aiPrompts[pid] = `List 6-8 SOFT SKILLS/character traits from this JD: "${finalJD.slice(0,200)}". Examples: Communication, Teamwork, Leadership, Problem Solving. Comma-separated. NO technical skills. Minimum 6.`;
             
             // Dynamic Traits from JD SOFT SKILL Keywords - ensure minimum 6
-            let kws = extractKeywordsFromJD(jd, 'soft').slice(0, 8);
-            while (kws.length < 6) {
-              const defaults = ["Communication", "Problem Solving", "Teamwork", "Leadership", "Adaptability", "Initiative"];
-              kws.push(defaults[kws.length % defaults.length]);
-            }
+            let kws = dynamicTraits(finalJD);
             const fallbackStr = kws.join(' | ');
             aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
@@ -561,35 +549,9 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], finalJD };
-    // Build intelligent prompt once (must exist before retries)
-    const intelligentPrompt = `
-You are an EXPERT RESUME INTELLIGENCE ENGINE.
+    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY };
 
-PRIMARY OBJECTIVE: Generate professional, ATS-friendly, logically connected resume content.
-
-JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1000)}"
-USER PROFILE: ${JSON.stringify(profile).slice(0, 1000)}
-
-CRITICAL RULES (MANDATORY):
-1. SUMMARY IS MANDATORY - Never skip. Must align with job role and showcase skills/impact.
-2. DO NOT COPY VERBATIM from job description. INFER skills intelligently based on role.
-3. EVERYTHING MUST BE CONNECTED: Skills → Projects → Experience → Certifications → Achievements.
-4. Projects MUST use the technical skills listed AND solve real problems.
-5. Certifications MUST match the technical skills and be realistic.
-6. Achievements MUST be specific and measurable.
-7. Generate realistic, entry-level friendly content for freshers.
-8. NO PLACEHOLDERS like "Skill 3".
-
-TASK: Return valid JSON with these exact keys: ${Object.keys(aiPrompts).join(', ')}
-
-INSTRUCTIONS:
-${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
-
-OUTPUT: Valid JSON only. No explanations. No markdown.
-`;
-
-    if (Object.keys(aiPrompts).length > 0 && finalJD) {
+    if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
         // try AI with retries for short JD to encourage variability
         const temps = (finalJD && finalJD.trim().length < 50) ? [0.7, 0.85, 0.95] : [0.6, 0.75];
         let aiData = null;
@@ -722,31 +684,35 @@ OUTPUT: Valid JSON only. No explanations. No markdown.
 
 function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
 
-function dynamicFallbackFor(type, label, rolePreset, finalJD, userSkills = []) {
-  if (type === 'chips' && label === 'Technical Skills') {
-    const pool = [...new Set([...(userSkills||[]), ...(rolePreset.skills||[])])];
-    const chosen = shuffle(pool).slice(0, 10);
-    return chosen.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-  }
-  if (type === 'chips' && label && label.toLowerCase().includes('character')) {
-    const soft = extractKeywordsFromJD(finalJD, 'soft');
-    const chosen = shuffle(soft.concat(['Communication','Teamwork','Problem Solving'])).slice(0,6);
-    return chosen.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-  }
-  if (type === 'list' && label === 'Projects') {
-    const pool = rolePreset.projects || [];
-    const chosen = shuffle(pool.slice()).slice(0,2).map(p => augmentProjectIfNeeded(p, rolePreset));
-    return chosen.map(p=>`<li>${p}</li>`).join('');
-  }
-  if (type === 'list' && label === 'Certifications') {
-    const pool = rolePreset.certs || [];
-    const chosen = shuffle(pool.slice()).slice(0,2);
-    return chosen.map(c=>`<li>${escapeHtml(c)}</li>`).join('');
-  }
-  if (type === 'list' && label === 'Achievements') {
-    const pool = rolePreset.achievements || [];
-    const chosen = shuffle(pool.slice()).slice(0,2).map(a => a.includes('%') ? a : `${a} (${randomPercent()}% improvement)`);
-    return chosen.map(a=>`<li>${escapeHtml(a)}</li>`).join('');
-  }
-  return '';
+function dynamicSummary(rolePreset, finalJD) {
+  const pct = randomPercent(15, 40);
+  const core = shuffle((rolePreset.skills || []).slice()).slice(0, 3);
+  const a = `Entry-level ${finalJD.split(' with ')[0] || 'professional'} with hands-on project experience in ${core.join(', ')}.`;
+  const b = `Built academic projects focused on data quality, automation, and performance optimization, achieving ~${pct}% improvements in key metrics.`;
+  const c = `Strong fundamentals in problem-solving and collaboration, eager to contribute to production-grade systems and learn quickly.`;
+  return `${a} ${b} ${c}`;
+}
+
+function dynamicCerts(rolePreset) {
+  // shuffle and pick 2; if none, provide safe common ones
+  const pool = (rolePreset.certs && rolePreset.certs.length) ? rolePreset.certs.slice() : ['AWS Certified Cloud Practitioner','PCEP – Certified Entry-Level Python Programmer'];
+  return shuffle(pool).slice(0,2);
+}
+
+function dynamicAchievements(rolePreset) {
+  const pool = (rolePreset.achievements && rolePreset.achievements.length) ? rolePreset.achievements.slice() : [];
+  const chosen = shuffle(pool).slice(0,2);
+  return augmentAchievements(chosen.length ? chosen : ['Improved system performance', 'Automated a recurring workflow'], rolePreset);
+}
+
+function dynamicProjects(rolePreset) {
+  const pool = (rolePreset.projects && rolePreset.projects.length) ? rolePreset.projects.slice() : [];
+  const chosen = shuffle(pool).slice(0,2);
+  return chosen.map(p => augmentProjectIfNeeded(p, rolePreset));
+}
+
+function dynamicTraits(finalJD) {
+  const base = extractKeywordsFromJD(finalJD, 'soft');
+  const extras = ['Ownership','Attention to Detail','Curiosity','Stakeholder Communication','Time Management','Learning Agility'];
+  return shuffle([...new Set(base.concat(extras))]).slice(0, 6);
 }
