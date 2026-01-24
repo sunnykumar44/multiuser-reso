@@ -2,44 +2,84 @@ const { saveHistory } = require("./firebase");
 
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
 // Extracts meaningful technical and soft skills from JD
-function extractKeywordsFromJD(jd) {
-  if (!jd || jd.trim().length < 5) return ["Technical", "Problem Solving", "Communication", "Teamwork", "Leadership", "Analytical"];
+function extractKeywordsFromJD(jd, type = 'all') {
+  if (!jd || jd.trim().length < 5) {
+    if (type === 'technical') return ["Python", "SQL", "Git", "REST APIs", "Linux", "Docker"];
+    if (type === 'soft') return ["Communication", "Problem Solving", "Teamwork", "Leadership", "Time Management", "Analytical"];
+    return ["Technical", "Problem Solving", "Communication", "Teamwork", "Leadership", "Analytical"];
+  }
   
   const stopWords = new Set([
     "and", "the", "for", "with", "ing", "to", "in", "a", "an", "of", "on", "at", "by", "is", "are", 
     "was", "were", "be", "been", "job", "role", "work", "experience", "candidate", "ability", 
     "knowledge", "looking", "seeking", "must", "have", "will", "can", "good", "strong", "years", 
-    "description", "looking", "required", "preferred", "should", "responsibilities", "requirements"
+    "description", "looking", "required", "preferred", "should", "responsibilities", "requirements",
+    "analyst", "developer", "engineer", "manager", "specialist", "coordinator", "intern", "junior", "senior"
+  ]);
+
+  // Technical skill indicators
+  const technicalIndicators = new Set([
+    "python", "java", "javascript", "sql", "react", "angular", "node", "django", "flask", "spring",
+    "aws", "azure", "docker", "kubernetes", "git", "api", "rest", "graphql", "mongodb", "postgresql",
+    "mysql", "redis", "kafka", "rabbitmq", "jenkins", "ci", "cd", "linux", "bash", "shell", "html",
+    "css", "typescript", "c++", "ruby", "php", "go", "rust", "scala", "kotlin", "swift", "matlab",
+    "tensorflow", "pytorch", "pandas", "numpy", "scikit", "tableau", "powerbi", "excel", "jira",
+    "agile", "scrum", "devops", "microservices", "restful", "oauth", "jwt", "nosql", "etl", "hadoop"
+  ]);
+
+  // Soft skill indicators
+  const softSkills = new Set([
+    "communication", "problem", "solving", "teamwork", "leadership", "analytical", "thinking",
+    "management", "time", "adaptability", "initiative", "collaboration", "creative", "critical",
+    "attention", "detail", "organizational", "interpersonal", "multitasking", "decision"
   ]);
 
   // Clean and split text
   const text = jd.toLowerCase();
   const words = text.replace(/[^a-z0-9\s+#\.]/g, ' ').split(/\s+/);
   
-  // Word frequency counting
-  const wordCount = {};
+  // Separate technical and soft skills
+  const technicalWords = [];
+  const softWords = [];
+  
   words.forEach(w => {
     if (w.length > 2 && !stopWords.has(w)) {
-      wordCount[w] = (wordCount[w] || 0) + 1;
+      if (technicalIndicators.has(w)) {
+        technicalWords.push(w.charAt(0).toUpperCase() + w.slice(1));
+      } else if (softSkills.has(w)) {
+        softWords.push(w.charAt(0).toUpperCase() + w.slice(1));
+      }
     }
   });
 
-  // Sort by frequency and capitalize
-  const sortedWords = Object.entries(wordCount)
-    .sort((a, b) => b[1] - a[1])
-    .map(([word]) => word.charAt(0).toUpperCase() + word.slice(1))
-    .filter((word, idx, arr) => arr.indexOf(word) === idx); // unique
+  // Remove duplicates
+  const uniqueTech = [...new Set(technicalWords)];
+  const uniqueSoft = [...new Set(softWords)];
 
-  // If we got less than 6, pad with common soft skills
-  const commonSkills = ["Communication", "Problem Solving", "Teamwork", "Leadership", "Time Management", "Analytical Thinking", "Adaptability", "Initiative"];
-  const result = [...sortedWords];
-  
-  for (const skill of commonSkills) {
-    if (result.length >= 18) break;
-    if (!result.includes(skill)) result.push(skill);
+  // Pad with defaults if needed
+  const defaultTech = ["Python", "SQL", "Git", "REST APIs", "Linux", "Docker", "JavaScript", "React"];
+  const defaultSoft = ["Communication", "Problem Solving", "Teamwork", "Leadership", "Time Management", "Analytical Thinking"];
+
+  if (type === 'technical') {
+    const result = [...uniqueTech];
+    for (const skill of defaultTech) {
+      if (result.length >= 15) break;
+      if (!result.includes(skill)) result.push(skill);
+    }
+    return result.slice(0, 15);
   }
 
-  return result.slice(0, 18); // Return top 18 keywords
+  if (type === 'soft') {
+    const result = [...uniqueSoft];
+    for (const skill of defaultSoft) {
+      if (result.length >= 8) break;
+      if (!result.includes(skill)) result.push(skill);
+    }
+    return result.slice(0, 8);
+  }
+
+  // Default: return both
+  return [...uniqueTech, ...uniqueSoft].slice(0, 18);
 }
 
 // --- HELPER 2: DYNAMIC FALLBACK GENERATOR (100% JD-DERIVED) ---
@@ -51,10 +91,10 @@ function getSmartFallback(section, jd) {
   const secondKeyword = dynamicKeywords[1] || jd.trim().split(' ')[1] || "Skills";
   const thirdKeyword = dynamicKeywords[2] || "Development";
 
-  // A. SKILLS - ALWAYS use JD keywords, minimum 6
+  // A. SKILLS - ALWAYS use JD TECHNICAL keywords, minimum 6
   if (section === 'skills') {
-     // Return top 15 keywords from JD directly, ensuring minimum of 6
-     const skills = dynamicKeywords.slice(0, 15);
+     // Return top 15 TECHNICAL keywords from JD directly, ensuring minimum of 6
+     const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 15);
      while (skills.length < 6) {
        skills.push(`Skill ${skills.length + 1}`);
      }
@@ -234,16 +274,16 @@ module.exports = async (req, res) => {
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `Extract 10-15 technical skills STRICTLY from this JD: "${jd.slice(0, 600)}". User has: ${userSkills.join(',')}. Add them ONLY if mentioned in JD. Return comma-separated list. Minimum 6 skills.`;
+            aiPrompts[pid] = `Extract 10-15 TECHNICAL skills ONLY from this JD: "${jd.slice(0, 600)}". User has: ${userSkills.join(',')}. Include programming languages, frameworks, tools, technologies. NO soft skills. Return comma-separated list. Minimum 6 technical skills.`;
             
-            // DYNAMIC FALLBACK: Use JD keywords as skills, minimum 6
+            // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 6
             const dynamicSkills = getSmartFallback('skills', jd);
             const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
             let combined = [...new Set([...relevantUserSkills, ...dynamicSkills])];
             
-            // Ensure minimum 6 skills
+            // Ensure minimum 6 technical skills
             while (combined.length < 6) {
-              const extra = extractKeywordsFromJD(jd)[combined.length];
+              const extra = extractKeywordsFromJD(jd, 'technical')[combined.length];
               if (extra && !combined.includes(extra)) combined.push(extra);
               else break;
             }
@@ -329,12 +369,13 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `List 6-8 character traits that match this JD: "${jd.slice(0,200)}". Comma-separated. Use ONLY JD-relevant traits. Minimum 6.`;
+            aiPrompts[pid] = `List 6-8 SOFT SKILLS/character traits from this JD: "${jd.slice(0,200)}". Examples: Communication, Teamwork, Leadership, Problem Solving. Comma-separated. NO technical skills. Minimum 6.`;
             
-            // Dynamic Traits from JD Keywords - ensure minimum 6
-            let kws = extractKeywordsFromJD(jd).slice(0, 8);
+            // Dynamic Traits from JD SOFT SKILL Keywords - ensure minimum 6
+            let kws = extractKeywordsFromJD(jd, 'soft').slice(0, 8);
             while (kws.length < 6) {
-              kws.push(`Trait ${kws.length + 1}`);
+              const defaults = ["Communication", "Problem Solving", "Teamwork", "Leadership", "Adaptability", "Initiative"];
+              kws.push(defaults[kws.length % defaults.length]);
             }
             const fallbackStr = kws.join(' | ');
             aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
