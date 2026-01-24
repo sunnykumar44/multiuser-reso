@@ -5,77 +5,38 @@ function escapeHtml(s = "") {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function slugify(s) {
-  return String(s || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '');
-}
-
-// --- 1. SUPER SMART FALLBACKS (The "Safety Net") ---
-// If AI fails, this logic manually looks at the JD to generate content.
 function getSmartFallback(section, jd) {
   const job = String(jd || "").toLowerCase();
   
-  // A. SKILLS FALLBACK
   if (section === 'skills') {
-     // Testing / QA
-     if (job.includes('test') || job.includes('qa') || job.includes('quality')) 
-        return ["Manual Testing", "JIRA", "SQL", "Bug Reporting", "Test Cases", "Selenium", "Agile"];
-     
-     // Java
-     if (job.includes('java')) 
-        return ["Java", "Spring Boot", "Hibernate", "SQL", "Maven", "REST APIs", "Microservices"];
-     
-     // Python
-     if (job.includes('python') || job.includes('django')) 
-        return ["Python", "Django", "Flask", "SQL", "Pandas", "Git", "API Development"];
-     
-     // Web
-     if (job.includes('react') || job.includes('frontend') || job.includes('web')) 
-        return ["React.js", "JavaScript", "HTML5", "CSS3", "Redux", "Tailwind", "Responsive Design"];
-     
-     // Data
-     if (job.includes('data') || job.includes('analyst')) 
-        return ["SQL", "Excel", "PowerBI", "Python", "Data Visualization", "Statistics"];
-     
-     // Generic / Admin
-     if (job.includes('admin') || job.includes('support')) 
-        return ["Microsoft Office", "Communication", "Data Entry", "Customer Service", "Time Management"];
-     
-     // Ultimate Fallback (No "Skill 1")
-     return ["Communication", "Problem Solving", "Teamwork", "Time Management", "Project Management", "Research"];
+     const common = ["Problem Solving", "Git", "Agile"];
+     if (job.includes('java')) return ["Java", "Spring Boot", "SQL", "REST APIs", ...common];
+     if (job.includes('python')) return ["Python", "Django", "SQL", "Pandas", ...common];
+     if (job.includes('react') || job.includes('front')) return ["React.js", "JavaScript", "HTML5", "CSS3", ...common];
+     return ["Technical Skill 1", "Technical Skill 2", "Communication", "Teamwork"];
   }
 
-  // B. CERTIFICATIONS FALLBACK
   if (section === 'certifications') {
-    if (job.includes('cloud') || job.includes('aws')) return "AWS Certified Cloud Practitioner | Microsoft Certified: Azure Fundamentals";
-    if (job.includes('test') || job.includes('qa')) return "ISTQB Certified Tester Foundation Level | Certified Software Tester (CSTE)";
-    if (job.includes('python')) return "PCEP – Certified Entry-Level Python Programmer | Google Data Analytics Certificate";
-    if (job.includes('java')) return "Oracle Certified Associate (Java SE) | Spring Professional Certification";
-    return "Certificate of Completion: Professional Skills | Advanced Excel Certification";
+    if (job.includes('cloud') || job.includes('aws')) return "AWS Certified Cloud Practitioner | Azure Fundamentals";
+    if (job.includes('python')) return "PCEP – Certified Entry-Level Python Programmer | Google Data Analytics";
+    if (job.includes('java')) return "Oracle Certified Associate (Java SE) | Spring Professional";
+    return "Course Completion: Full Stack Development | Professional Communication";
   }
 
-  // C. PROJECTS FALLBACK
   if (section === 'projects') {
-     if (job.includes('java')) 
-        return "<b>Employee Management System:</b> Java Swing & MySQL app for tracking records. | <b>Library API:</b> Spring Boot REST API for inventory management.";
-     
-     if (job.includes('test') || job.includes('qa')) 
-        return "<b>E-Commerce Testing Suite:</b> Wrote 50+ test cases and executed manual testing cycles for a shopping cart module. | <b>Bug Tracking System:</b> Configured JIRA workflows for defect tracking and reporting.";
-
-     if (job.includes('python')) 
-        return "<b>Weather App:</b> CLI tool using Python and OpenWeatherMap API. | <b>Sentiment Analysis:</b> text classification script using NLTK.";
-     
-     return "<b>Academic Management System:</b> Designed database schema for college operations. | <b>Task Tracker App:</b> Built a to-do list application to improve productivity.";
+     if (job.includes('java')) return "<b>Employee System:</b> Java Swing & MySQL app. | <b>Bookstore API:</b> Spring Boot REST API.";
+     if (job.includes('python')) return "<b>Weather App:</b> Python CLI tool with API integration. | <b>Analysis Tool:</b> Data processing script using Pandas.";
+     if (job.includes('web')) return "<b>Admin Dashboard:</b> React.js admin panel. | <b>Portfolio Site:</b> Responsive HTML5/CSS3 website.";
+     return "<b>Academic Project 1:</b> Database design and implementation. | <b>Academic Project 2:</b> Web application prototype.";
   }
 
-  // D. ACHIEVEMENTS FALLBACK
   if (section === 'achievements') {
-      return "Awarded 'Best Student Project' for final year submission among 50+ entries. | Ranked in the top 10% of participants in the Annual Coding Hackathon.";
+      return "Awarded 'Best Student Project' for final year submission. | Ranked top 10% in Annual Coding Hackathon.";
   }
 
   return "";
 }
 
-// 2. CANONICAL NAMES (Merges "Work" and "Experience")
 function canonicalSectionName(name) {
   const s = String(name || "").trim().toLowerCase();
   if (s.includes("work") || s.includes("experience")) return "Work Experience"; 
@@ -116,23 +77,14 @@ const RESUME_CSS = `
     .resume-role { font-weight: bold; color: #000; }
     .resume-date { font-weight: bold; font-size: 10px; color: #000; }
     .resume-company { font-style: italic; color: #444; margin-bottom: 2px; display: block; }
-    
-    /* LIST STYLING */
     .generated-resume ul { margin-left: 18px; margin-top: 4px; padding: 0; }
     .generated-resume li { margin-bottom: 4px; font-size: 11px; }
     .generated-resume p { margin-bottom: 4px; font-size: 11px; text-align: justify; }
     
-    /* BOX/CHIP STYLE */
     .skill-tag {
-      display: inline-block;
-      padding: 3px 8px;
-      margin: 0 4px 4px 0;
-      border: 1px solid #cbd5e1;
-      border-radius: 4px;
-      background-color: #f8fafc;
-      font-size: 10px;
-      font-weight: 600;
-      color: #334155;
+      display: inline-block; padding: 3px 8px; margin: 0 4px 4px 0;
+      border: 1px solid #cbd5e1; border-radius: 4px; background-color: #f8fafc;
+      font-size: 10px; font-weight: 600; color: #334155;
     }
   </style>
 `;
@@ -145,8 +97,8 @@ async function callGeminiFlash(promptText) {
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
-      temperature: 0.9, 
-      maxOutputTokens: 2048, // Reduced slightly to improve speed/reliability
+      temperature: 0.7, // Lower temperature = Faster response
+      maxOutputTokens: 2048, // Reduced to ensure <10s execution
       responseMimeType: "application/json"
     }
   };
@@ -193,10 +145,9 @@ module.exports = async (req, res) => {
     const aiTypes = {}; 
     let sectionCounter = 0;
 
-    // --- SCOPE DEDUPLICATION ---
     const seen = new Set();
     const sectionsToRender = [];
-    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Character Traits'];
+    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Certifications', 'Achievements'];
     
     for (const s of rawScope) {
         const c = canonicalSectionName(s);
@@ -216,46 +167,34 @@ module.exports = async (req, res) => {
         return 0;
     });
 
-    // --- BUILD SECTIONS ---
     for (const secObj of sectionsToRender) {
         const label = secObj.canonical;
         
-        // --- A. SUMMARY ---
         if (label === 'Summary') {
             resumeBodyHtml += `<div class="resume-section-title">Summary</div>`;
             const pid = `sec_${sectionCounter++}`;
             const original = profile.summary || "";
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `Write a professional 4-sentence summary tailored to this Job Description: "${jd.slice(0,300)}...". IGNORE profile data if it contradicts the JD. Focus on keywords from JD.`;
-            aiFallbacks[pid] = `<p>Aspiring professional looking to leverage skills in ${jd.slice(0,50)} to contribute to organizational success.</p>`;
+            aiPrompts[pid] = `Write a 3-sentence summary for a Fresher '${jd.slice(0,50)}' role. Input: "${original}". STRICTLY tailor to JD keywords.`;
+            aiFallbacks[pid] = `<p>Aspiring ${jd.slice(0,30)} with strong academic background and relevant project experience.</p>`;
             aiTypes[pid] = 'summary';
         }
-        
-        // --- B. SKILLS (CHIPS) ---
         else if (label === 'Technical Skills') {
             resumeBodyHtml += `<div class="resume-section-title">Technical Skills</div>`;
             const pid = `sec_${sectionCounter++}`;
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
-            
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            
-            aiPrompts[pid] = `List 12-15 technical skills STRICTLY from this JD: "${jd.slice(0, 800)}". Include user's skills (${userSkills.join(', ')}) ONLY if relevant. Return comma-separated list.`;
-            
-            // Smart Fallback
+            aiPrompts[pid] = `List 10-12 technical skills STRICTLY for JD: "${jd.slice(0, 300)}". Include user skills (${userSkills.join(',')}) if relevant. Return comma-separated list.`;
             const fallbackList = getSmartFallback('skills', jd);
-            // Append user skills to fallback if they match basic logic, else use JD fallback
-            const combined = [...new Set([...fallbackList])];
+            const combined = [...new Set([...userSkills, ...fallbackList])].slice(0, 10);
             aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
-        
-        // --- C. WORK EXPERIENCE ---
         else if (label === 'Work Experience') {
             const experienceSections = (profile.customSections || [])
                .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')));
             
-            // Deduplicate Items in Experience
             const uniqueItems = new Map();
             if (experienceSections.length > 0) {
                  experienceSections.forEach(sec => {
@@ -271,102 +210,66 @@ module.exports = async (req, res) => {
                     const { item, secTitle } = data;
                     const pid = `sec_${sectionCounter++}`;
                     let companyName = secTitle.toLowerCase().includes('experience') ? "" : secTitle;
-
                     resumeBodyHtml += `
                       <div class="resume-item">
-                        <div class="resume-row">
-                          <span class="resume-role">${escapeHtml(item.key)}</span>
-                          <span class="resume-date">${escapeHtml(item.date || '')}</span>
-                        </div>
+                        <div class="resume-row"><span class="resume-role">${escapeHtml(item.key)}</span><span class="resume-date">${escapeHtml(item.date || '')}</span></div>
                         ${companyName ? `<span class="resume-company">${escapeHtml(companyName)}</span>` : ''}
                         <ul id="${pid}">[${pid}]</ul>
                       </div>`;
-                    
-                    aiPrompts[pid] = `Rewrite experience for role '${item.key}'. Write 3 DETAILED sentences using keywords from JD: "${jd.slice(0,200)}...". Return pipe-separated string.`;
+                    aiPrompts[pid] = `Rewrite experience: "${item.bullets}". Write 2 concise, metric-driven sentences tailored to JD. Pipe-separated.`;
                     aiFallbacks[pid] = `<li>${escapeHtml(item.key)}</li>`;
                     aiTypes[pid] = 'list';
                 }
-            } else {
-                 // No Experience in profile? DO NOT INVENT if not asked, or invent relevant if asked.
-                 // We will invent only if explicitly in scope, but typically for freshers we skip or show "Internship"
             }
         }
-
-        // --- D. PROJECTS (Strictly 2) ---
         else if (label === 'Projects') {
              resumeBodyHtml += `<div class="resume-section-title">Projects</div>`;
-             // Setup for 2 slots
              const pid = `sec_${sectionCounter++}`;
              resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-             
-             // Check if user has projects
              const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
-             
              if (projSec && projSec.items && projSec.items.length) {
-                  // User has projects, try to use them but tailor to JD
                   const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
-                  aiPrompts[pid] = `Rewrite these 2 projects: "${inputs}". Format: "<b>Title:</b> Desc | <b>Title:</b> Desc". Tailor to JD keywords.`;
+                  aiPrompts[pid] = `Rewrite 2 projects: "${inputs}". Format: "<b>Title:</b> Desc | <b>Title:</b> Desc". Tailor to JD.`;
              } else {
-                  // Invent
-                  aiPrompts[pid] = `Invent 2 academic projects for '${jd.slice(0,50)}'. Format: "<b>Project Name:</b> Tech stack & description | <b>Project Name:</b> Tech stack & description".`;
+                  aiPrompts[pid] = `Invent 2 academic projects for '${jd.slice(0,50)}'. Format: "<b>Title:</b> Desc | <b>Title:</b> Desc".`;
              }
-             
              aiFallbacks[pid] = getSmartFallback('projects', jd).split('|').map(p => `<li>${p.trim()}</li>`).join('');
              aiTypes[pid] = 'list';
         }
-        
-        // --- E. EDUCATION ---
         else if (label === 'Education') {
              resumeBodyHtml += `<div class="resume-section-title">Education</div>`;
-             const eduList = (profile.education && profile.education.length) 
-                ? profile.education 
-                : (profile.college ? [profile.college] : []);
-             
+             const eduList = (profile.education && profile.education.length) ? profile.education : (profile.college ? [profile.college] : []);
              resumeBodyHtml += `<div class="resume-item">`;
-             if (eduList.length > 0) {
-                 resumeBodyHtml += eduList.map(e => `<div>${escapeHtml(e)}</div>`).join('');
-             } else {
-                 resumeBodyHtml += `<div><i>(Add Education)</i></div>`;
-             }
+             if (eduList.length > 0) resumeBodyHtml += eduList.map(e => `<div>${escapeHtml(e)}</div>`).join('');
+             else resumeBodyHtml += `<div><i>(Add Education)</i></div>`;
              resumeBodyHtml += `</div>`;
         }
-        
-        // --- F. CERTIFICATIONS ---
         else if (label === 'Certifications') {
             resumeBodyHtml += `<div class="resume-section-title">Certifications</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            
-            aiPrompts[pid] = `Invent 2 relevant certifications for '${jd.slice(0,50)}'. Format: "Cert Name | Cert Name".`;
+            aiPrompts[pid] = `Invent 2 certifications for '${jd.slice(0,50)}'. Format: "Cert Name | Cert Name".`;
             aiFallbacks[pid] = getSmartFallback('certifications', jd).split('|').map(c => `<li>${c.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
-
-        // --- G. ACHIEVEMENTS ---
         else if (label === 'Achievements') {
             resumeBodyHtml += `<div class="resume-section-title">Achievements</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            
-            aiPrompts[pid] = `Invent 2 academic/professional achievements for '${jd.slice(0,50)}'. Pipe-separated.`;
+            aiPrompts[pid] = `Invent 2 achievements for '${jd.slice(0,50)}'. Pipe-separated.`;
             aiFallbacks[pid] = getSmartFallback('achievements', jd).split('|').map(a => `<li>${a.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
-
-        // --- H. TRAITS / OTHERS ---
         else {
             resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            
             aiPrompts[pid] = `List 6 character traits for '${jd.slice(0,50)}'. Comma-separated.`;
-            const fallbackStr = getSmartFallback('traits', jd);
-            aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
+            aiFallbacks[pid] = "Fast Learner | Adaptable | Reliable".split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
     }
 
-    // --- STEP 3: CALL AI & FORMAT ---
     let htmlSkeleton = `
     <div class="generated-resume">
       ${RESUME_CSS}
@@ -378,61 +281,40 @@ module.exports = async (req, res) => {
     </div>`;
 
     if (Object.keys(aiPrompts).length > 0 && jd) {
-        const seed = Math.random().toString(36).substring(7);
-        const prompt = `
-        You are a Resume Content Generator. Seed: ${seed}.
-        TASK: Return valid JSON. Keys: ${Object.keys(aiPrompts).join(', ')}.
-        INSTRUCTIONS:
-        ${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
-        `;
+        const prompt = `You are a Resume Content Generator. TASK: Return valid JSON. Keys: ${Object.keys(aiPrompts).join(', ')}. INSTRUCTIONS:\n${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`;
 
         try {
             const aiJsonText = await callGeminiFlash(prompt);
             let aiData = {};
-            try {
-                aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim());
-            } catch (e) { console.error("JSON Error", e); }
+            try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); } catch (e) {}
 
             Object.keys(aiPrompts).forEach(pid => {
                 let val = aiData[pid];
                 const type = aiTypes[pid];
-                
                 if (val && typeof val === 'string' && val.length > 2) {
                     if (type === 'chips') { 
                         const chips = val.split(/[,|]/).map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    } 
-                    else if (type === 'list') { 
+                    } else if (type === 'list') { 
                         const lis = val.split('|').map(b => `<li>${b.trim()}</li>`).join('');
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    }
-                    else if (type === 'block-list') { 
-                        const lis = val.split('|').map(b => `<li>${b.trim()}</li>`).join('');
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<ul>${lis}</ul>`);
-                    }
-                    else { // Summary
+                    } else if (type === 'summary') {
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(val)}</p>`);
                     }
                 } else {
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
                 }
             });
-
         } catch (e) {
-            Object.keys(aiPrompts).forEach(pid => {
-                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-            });
+            Object.keys(aiPrompts).forEach(pid => htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]));
         }
     } else {
-         Object.keys(aiPrompts).forEach(pid => {
-             htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-         });
+         Object.keys(aiPrompts).forEach(pid => htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]));
     }
 
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton } });
 
   } catch (err) {
-    console.error(err);
     return res.status(500).json({ error: err.message });
   }
 };
