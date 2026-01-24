@@ -102,10 +102,15 @@ function getSmartFallback(section, jd) {
 
   // A. SKILLS - ALWAYS use JD TECHNICAL keywords, minimum 6
   if (section === 'skills') {
-     // Return top 15 TECHNICAL keywords from JD directly, ensuring minimum of 6
+     // Return top technical keywords from JD directly
      const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 15);
-     while (skills.length < 6) {
-       skills.push(`Skill ${skills.length + 1}`);
+     // If not enough technical keywords, pad from role preset
+     if (skills.length < 6) {
+       const preset = getRolePreset(jd).skills || [];
+       for (const p of preset) {
+         if (skills.length >= 6) break;
+         if (!skills.includes(p)) skills.push(p);
+       }
      }
      return skills;
   }
@@ -184,6 +189,92 @@ const RESUME_CSS = `
   </style>
 `;
 
+// Role presets provide realistic, role-aligned seeds when JD is sparse
+const ROLE_PRESETS = {
+  'software engineer': {
+    skills: ['Python','Java','JavaScript','REST APIs','SQL','Git','Docker','Linux','Microservices'],
+    projects: [
+      '<b>E-commerce API:</b> Built using Python, Django, PostgreSQL to handle product catalogs and orders. Achieved 99.9% uptime and 30% faster response times.',
+      '<b>Deployment Pipeline:</b> Implemented CI/CD with Jenkins and Docker to automate testing and deployment, reducing release time by 40%.'
+    ],
+    certs: ['Oracle Certified Associate, Java SE 11 Developer','AWS Certified Developer – Associate'],
+    achievements: ['Reduced API response time by 30% via caching','Automated builds saving 10 hours/week']
+  },
+  'python developer': {
+    skills: ['Python','Django','Flask','REST APIs','PostgreSQL','Pandas','Docker','Git'],
+    projects: ['<b>Weather App:</b> CLI built using Python and API integration to fetch and analyze weather data. | <b>Data Pipeline:</b> ETL pipeline using Pandas and PostgreSQL.'],
+    certs: ['PCEP – Certified Entry-Level Python Programmer','AWS Certified Cloud Practitioner'],
+    achievements: ['Improved data processing throughput by 25%','Reduced error rates via validation checks']
+  },
+  'java developer': {
+    skills: ['Java','Spring Boot','Hibernate','REST APIs','MySQL','Maven','Git'],
+    projects: ['<b>Employee Management:</b> Spring Boot app with REST APIs and MySQL backend. | <b>Inventory Service:</b> Microservice with Spring and Docker.'],
+    certs: ['Oracle Certified Associate, Java SE 11 Developer','OCP Java SE'],
+    achievements: ['Improved DB query performance by 40%','Delivered core feature ahead of schedule']
+  },
+  'data analyst': {
+    skills: ['SQL','Python','Pandas','NumPy','Tableau','Excel','PowerBI','Data Visualization'],
+    projects: ['<b>Sales Dashboard:</b> Built Tableau dashboards enabling 20% faster decisions. | <b>Data Cleaning Pipeline:</b> Used Python/Pandas to clean and standardize data.'],
+    certs: ['Google Data Analytics Professional Certificate','PCEP – Certified Entry-Level Python Programmer'],
+    achievements: ['Reduced reporting time by 50%','Improved dashboard adoption by 30%']
+  },
+  'middleware': {
+    skills: ['Apache Kafka','RabbitMQ','Java','Spring Boot','REST APIs','Microservices','Docker','Kubernetes'],
+    projects: ['<b>Message Broker:</b> Implemented Kafka-based message broker to handle 1000s msgs/sec. | <b>Integration Layer:</b> Built Spring Boot middleware integrating multiple services with retry/backoff.'],
+    certs: ['Confluent Certified Developer for Apache Kafka (CCDAK)','Oracle Java SE 11 Associate'],
+    achievements: ['Improved message throughput by 3x','Reduced integration failures by 40%']
+  },
+  'automation': {
+    skills: ['Selenium','Python','CI/CD','Jenkins','Docker','TestNG','API Testing','Git'],
+    projects: ['<b>Test Automation Suite:</b> Built Selenium + Python suite to automate regression testing reducing manual QA time. | <b>CI Integration:</b> Integrated tests in Jenkins pipeline to catch regressions early.'],
+    certs: ['ISTQB Foundation','PCEP – Certified Entry-Level Python Programmer'],
+    achievements: ['Reduced manual test time by 80%','Increased release confidence via automated tests']
+  },
+  'web developer': {
+    skills: ['HTML5','CSS3','JavaScript','React','REST APIs','Node.js','Git','Responsive Design'],
+    projects: ['<b>E-commerce Frontend:</b> Responsive React app with cart and checkout. | <b>Admin Dashboard:</b> Built with React and REST API integrations.'],
+    certs: ['FreeCodeCamp Front End Libraries Certification','Google Web Developer'],
+    achievements: ['Improved page load times by 35%','Increased conversion through UX fixes']
+  },
+  default: {
+    skills: ['Python','SQL','Git','REST APIs','Docker','Communication'],
+    projects: ['<b>Demo Project:</b> Built a simple CRUD service using core technologies relevant to the role. | <b>Tooling Project:</b> Automated routine tasks using scripts and CI.'],
+    certs: ['PCEP – Certified Entry-Level Python Programmer'],
+    achievements: ['Delivered project demonstrating technical fundamentals']
+  }
+};
+
+// Flatten tech tokens for validation
+const TECH_TOKENS = [
+  'python','java','javascript','typescript','c++','c#','ruby','php','go','rust','scala','kotlin','swift','r','matlab','perl','bash','django','flask','spring','react','angular','node','express','postgresql','mysql','mongodb','redis','aws','azure','gcp','docker','kubernetes','git','jenkins','terraform','pandas','numpy','tableau','powerbi','sql','rest','api','graphql','kafka','rabbitmq'
+];
+
+function getRolePreset(jd) {
+  if (!jd || !jd.trim()) return ROLE_PRESETS['default'];
+  const text = jd.toLowerCase();
+  for (const key of Object.keys(ROLE_PRESETS)) {
+    if (key === 'default') continue;
+    if (text.includes(key) || text.includes(key.split(' ')[0])) return ROLE_PRESETS[key];
+  }
+  // fallback heuristics
+  if (text.includes('data')) return ROLE_PRESETS['data analyst'];
+  if (text.includes('middleware') || text.includes('broker')) return ROLE_PRESETS['middleware'];
+  if (text.includes('automation') || text.includes('qa') || text.includes('testing')) return ROLE_PRESETS['automation'];
+  if (text.includes('web') || text.includes('frontend') || text.includes('react')) return ROLE_PRESETS['web developer'];
+  if (text.includes('java')) return ROLE_PRESETS['java developer'];
+  if (text.includes('python')) return ROLE_PRESETS['python developer'];
+  return ROLE_PRESETS['software engineer'];
+}
+
+function isLikelyTechnical(token) {
+  if (!token || typeof token !== 'string') return false;
+  const t = token.toLowerCase();
+  if (TECH_TOKENS.some(tok => t.includes(tok))) return true;
+  // also accept patterns like 'react.js', 'node.js'
+  if (/\b(react|node|django|flask|spring)\b/.test(t)) return true;
+  return false;
+}
+
 async function callGeminiFlash(promptText) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
   
@@ -238,6 +329,7 @@ module.exports = async (req, res) => {
     const aiPrompts = {}; 
     const aiFallbacks = {}; 
     const aiTypes = {}; 
+    const aiLabels = {};
     let sectionCounter = 0;
 
     // CRITICAL FIX: Expand short JDs before building sections
@@ -259,6 +351,10 @@ module.exports = async (req, res) => {
       return jd || '';
     })();
 
+    // Role preset for strong deterministic fallbacks and validation
+    const rolePreset = getRolePreset(finalJD);
+    
+    // Map pid -> section label for validation later
     const seen = new Set();
     const sectionsToRender = [];
     const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Certifications', 'Achievements', 'Character Traits'];
@@ -296,7 +392,8 @@ module.exports = async (req, res) => {
             const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 3).join(', ');
             aiFallbacks[pid] = `<p>Motivated ${kw} professional with strong academic foundation and hands-on project experience in ${skills}. Demonstrated ability to apply technical knowledge to real-world problems through academic projects. Eager to contribute to organizational success and grow in a challenging environment.</p>`;
             aiTypes[pid] = 'summary';
-        }
+            aiLabels[pid] = 'Summary';
+         }
         else if (label === 'Technical Skills') {
             resumeBodyHtml += `<div class="resume-section-title">Technical Skills</div>`;
             const pid = `sec_${sectionCounter++}`;
@@ -320,7 +417,8 @@ module.exports = async (req, res) => {
             combined = combined.slice(0, 15);
             aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
-        }
+            aiLabels[pid] = 'Technical Skills';
+         }
         else if (label === 'Work Experience') {
             const experienceSections = (profile.customSections || [])
                .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')));
@@ -350,7 +448,8 @@ module.exports = async (req, res) => {
                     aiPrompts[pid] = `Rewrite experience: "${item.bullets}". Write 2 concise sentences using keywords: "${jd.slice(0,200)}...". Pipe-separated.`;
                     aiFallbacks[pid] = `<li>${escapeHtml(item.key)}</li>`;
                     aiTypes[pid] = 'list';
-                }
+                    aiLabels[pid] = 'Work Experience';
+                 }
             }
         }
         else if (label === 'Projects') {
@@ -362,8 +461,10 @@ module.exports = async (req, res) => {
              if (projSec && projSec.items && projSec.items.length) {
                   const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
                   aiPrompts[pid] = `INTELLIGENT PROJECT GENERATION: Rewrite 2 projects that MUST: (1) Use technical skills from role "${jd.slice(0,100)}" (2) Solve real problems (3) Show measurable impact. Input: "${inputs}". Format: "<b>Project Title with Tech Stack:</b> Description with technologies and outcome | <b>Title:</b> Description". Make them connected to the role.`;
+                  aiLabels[pid] = 'Projects';
              } else {
                   aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${jd.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used. Format: "<b>Project Name:</b> Built using [Tech Stack] to solve [Problem]. Achieved [Result]. | <b>Project 2:</b> Description". Entry-level appropriate.`;
+                  aiLabels[pid] = 'Projects';
              }             // Dynamic Fallback
              aiFallbacks[pid] = getSmartFallback('projects', jd).split('|').map(p => `<li>${p.trim()}</li>`).join('');
              aiTypes[pid] = 'list';
@@ -383,6 +484,7 @@ module.exports = async (req, res) => {
             aiPrompts[pid] = `INTELLIGENT CERTIFICATION GENERATION for "${finalJD.slice(0, 100)}" role. Generate 2 REAL, FULL certification names that: (1) Match the technical skills (2) Are industry-standard (3) Appropriate for entry-level. Examples: "AWS Certified Cloud Practitioner", "Oracle Certified Associate, Java SE 11 Developer", "Microsoft Certified: Azure Fundamentals", "PCEP – Certified Entry-Level Python Programmer". Format: "Full Cert Name | Full Cert Name". NO generic names.`;
             aiFallbacks[pid] = getSmartFallback('certifications', finalJD).split('|').map(c => `<li>${c.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
+            aiLabels[pid] = 'Certifications';
         }
         else if (label === 'Achievements') {
             resumeBodyHtml += `<div class="resume-section-title">Achievements</div>`;
@@ -391,8 +493,9 @@ module.exports = async (req, res) => {
             aiPrompts[pid] = `INTELLIGENT ACHIEVEMENT GENERATION for "${finalJD.slice(0, 100)}" role. Create 2 SPECIFIC, MEASURABLE achievements that: (1) Use technical skills (2) Show quantifiable results (3) Are realistic for freshers. Examples: "Reduced API response time by 35% through caching optimization", "Automated data processing pipeline saving 20 hours/week", "Improved code test coverage from 60% to 85%". Format: "Achievement 1 | Achievement 2". NO generic statements.`;
             aiFallbacks[pid] = getSmartFallback('achievements', finalJD).split('|').map(a => `<li>${a.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
+            aiLabels[pid] = 'Achievements';
         }
-        else {
+         else {
             resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
@@ -407,8 +510,9 @@ module.exports = async (req, res) => {
             const fallbackStr = kws.join(' | ');
             aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
-        }
-    }
+            aiLabels[pid] = secObj.original;
+         }
+     }
 
     let htmlSkeleton = `
     <div class="generated-resume">
@@ -467,15 +571,82 @@ OUTPUT: Valid JSON only. No explanations. No markdown. NO placeholders.
             Object.keys(aiPrompts).forEach(pid => {
                 let val = aiData[pid];
                 const type = aiTypes[pid];
+                const label = aiLabels[pid] || '';
+                // process AI output
                 if (val && typeof val === 'string' && val.length > 2) {
-                    if (type === 'chips') { 
-                        const chips = val.split(/[,|]/).map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
+                    // SKILLS (chips)
+                    if (type === 'chips' && label === 'Technical Skills') {
+                        const parts = val.split(/[,|\n]+/).map(s=>s.trim()).filter(Boolean);
+                        const techCount = parts.filter(p => isLikelyTechnical(p)).length;
+                        if (techCount < 6) {
+                            // fallback to rolePreset skills
+                            const chips = (rolePreset.skills || []).slice(0,8).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                        } else {
+                            const chips = parts.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                        }
+                    }
+                    // TRAITS (chips but soft skills)
+                    else if (type === 'chips' && label && label.toLowerCase().includes('character')) {
+                        const parts = val.split(/[,|\n]+/).map(s=>s.trim()).filter(Boolean);
+                        const soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,8);
+                        while (soft.length < 6) {
+                            const more = extractKeywordsFromJD(finalJD, 'soft') || [];
+                            for (const m of more) { if (!soft.includes(m)) soft.push(m); if (soft.length>=6) break; }
+                            break;
+                        }
+                        const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    } else if (type === 'list') { 
-                        const lis = val.split('|').map(b => `<li>${b.trim()}</li>`).join('');
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    } else if (type === 'summary') {
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(val)}</p>`);
+                    }
+                    // LIST (projects / certs / achievements)
+                    else if (type === 'list') {
+                        const parts = val.split('|').map(b => b.trim()).filter(Boolean);
+                        if (label === 'Projects') {
+                            const valid = parts.every(p => isLikelyTechnical(p) || rolePreset.projects.some(pr => p.toLowerCase().includes(pr.split(':')[0].toLowerCase())));
+                            if (!valid) {
+                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, (rolePreset.projects || []).slice(0,2).map(p=>`<li>${p}</li>`).join(''));
+                            } else {
+                                const lis = parts.map(b => `<li>${b}</li>`).join('');
+                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                            }
+                        } else if (label === 'Certifications') {
+                            const CERT_TOKENS = ['AWS','Oracle','PCEP','Microsoft','ISTQB','Confluent','Google'];
+                            const valid = parts.every(p => CERT_TOKENS.some(t => p.toUpperCase().includes(t.toUpperCase())) || p.split(' ').length>2);
+                            if (!valid) {
+                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, (rolePreset.certs || []).slice(0,2).map(c=>`<li>${c}</li>`).join(''));
+                            } else {
+                                const lis = parts.map(b => `<li>${b}</li>`).join('');
+                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                            }
+                        } else if (label === 'Achievements') {
+                            const ACH_CHECK = parts.every(p => /%|\b(reduc|improv|increas|save|reduc|improv|autom|improved)\b/i.test(p) || p.split(' ').length>4);
+                            if (!ACH_CHECK) {
+                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, (rolePreset.achievements || []).slice(0,2).map(a=>`<li>${a}</li>`).join(''));
+                            } else {
+                                const lis = parts.map(b => `<li>${b}</li>`).join('');
+                                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                            }
+                        } else {
+                            const lis = parts.map(b => `<li>${b}</li>`).join('');
+                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                        }
+                    }
+                    else if (type === 'summary') {
+                        // ensure summary mentions at least one role skill
+                        const s = val;
+                        const techs = rolePreset.skills || [];
+                        const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
+                        if (!hasTech && techs.length) {
+                            const augmented = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
+                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(augmented)}</p>`);
+                        } else {
+                            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
+                        }
+                    }
+                    else {
+                        // default insertion
+                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
                     }
                 } else {
                     // AI didn't return this key, use fallback
