@@ -551,6 +551,27 @@ module.exports = async (req, res) => {
     // 3. CALL AI (finalJD already declared above)
     const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly };
 
+    // Build intelligentPrompt (required for AI path)
+    const intelligentPrompt = `
++You are an EXPERT RESUME INTELLIGENCE ENGINE.
++
++PRIMARY OBJECTIVE: Generate a complete, ATS-friendly resume where ALL sections are connected and role-aligned.
++
++JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1200)}"
++USER PROFILE (may be partial): ${JSON.stringify(profile).slice(0, 1500)}
++
++RULES:
++1) SUMMARY IS MANDATORY.
++2) Infer role-appropriate technical skills; do not copy JD verbatim.
++3) Skills must be used in Projects; Projects support Experience; Certs match Skills; Achievements come from Projects/Experience.
++4) Return VALID JSON ONLY with these keys: ${Object.keys(aiPrompts).join(', ')}
++
++SECTION INSTRUCTIONS:
++${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
++
++OUTPUT: JSON only. No markdown.
++`;
+
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
         // try AI with retries for short JD to encourage variability
         const temps = (finalJD && finalJD.trim().length < 50) ? [0.7, 0.85, 0.95] : [0.6, 0.75];
@@ -559,14 +580,13 @@ module.exports = async (req, res) => {
         for (const t of temps) {
             try {
                 const seed = Math.random().toString(36).substring(2,8);
-                const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed} (Produce a realistic, role-aligned but distinct variation)`;
+                const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
                 const aiJsonText = await callGeminiFlash(prompt, { temperature: t, maxOutputTokens: 3000 });
                 try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
                 if (aiData) break;
             } catch (e) {
                 lastError = e;
                 debug.attempts.push({ temp: t, parsed: false, error: e.message });
-                console.warn('AI attempt failed at temp', t, e);
             }
         }
 
@@ -667,11 +687,16 @@ module.exports = async (req, res) => {
             });
         } catch (e) {
             console.error('AI processing failed:', e);
+            if (aiOnly) {
+              return res.status(503).json({ ok: false, error: e.message || 'AI failed', debug });
+            }
             Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
         }
     } else {
-         // No AI call needed or JD too short - use JD-derived fallbacks
-         console.log('Using JD-derived fallbacks (JD too short or no prompts)');
+         if (aiOnly) {
+           const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
+           return res.status(503).json({ ok: false, error: reason, debug });
+         }
          Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
     }
 
