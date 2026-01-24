@@ -27,37 +27,34 @@ function extractKeywordsFromJD(jd) {
   return meaningfulWords.slice(0, 12); // Return top 12 keywords
 }
 
-// --- HELPER 2: DYNAMIC FALLBACK GENERATOR ---
+// --- HELPER 2: DYNAMIC FALLBACK GENERATOR (100% JD-DERIVED) ---
 function getSmartFallback(section, jd) {
   const job = String(jd || "").toLowerCase();
   // Extract real keywords from the JD input
   const dynamicKeywords = extractKeywordsFromJD(jd);
-  const mainKeyword = dynamicKeywords[0] || "System";
-  const secondKeyword = dynamicKeywords[1] || "Core";
+  const mainKeyword = dynamicKeywords[0] || jd.trim().split(' ')[0] || "Technical";
+  const secondKeyword = dynamicKeywords[1] || jd.trim().split(' ')[1] || "Skills";
+  const thirdKeyword = dynamicKeywords[2] || "Development";
 
-  // A. SKILLS
+  // A. SKILLS - ALWAYS use JD keywords
   if (section === 'skills') {
-     // If we found keywords in the JD, return them as skills!
-     if (dynamicKeywords.length > 3) {
-        return dynamicKeywords; // Return array of actual JD words
-     }
-     // Default backup if JD was empty
-     return ["Problem Solving", "Technical Analysis", "Communication", "Teamwork"];
+     // Return top 12 keywords from JD directly
+     return dynamicKeywords.slice(0, 12);
   }
 
-  // B. CERTIFICATIONS
+  // B. CERTIFICATIONS - Use JD keywords
   if (section === 'certifications') {
-    return `Certified ${mainKeyword} Professional | Advanced ${secondKeyword} Certification`;
+    return `Certified ${mainKeyword} Professional | ${secondKeyword} Specialist Certification`;
   }
 
-  // C. PROJECTS (Uses JD words to invent titles)
+  // C. PROJECTS - Use JD keywords
   if (section === 'projects') {
-     return `<b>${mainKeyword} Optimization System:</b> Developed a high-performance solution for ${mainKeyword} processing. | <b>${secondKeyword} Integration Module:</b> Built a robust API integration for ${secondKeyword} data flows.`;
+     return `<b>${mainKeyword} ${thirdKeyword} System:</b> Implemented ${mainKeyword} features using ${secondKeyword} technologies. | <b>${secondKeyword} Optimization Tool:</b> Built ${thirdKeyword} solution for ${mainKeyword} processing.`;
   }
 
-  // D. ACHIEVEMENTS
+  // D. ACHIEVEMENTS - Use JD keywords
   if (section === 'achievements') {
-      return `Recognized for optimizing ${mainKeyword} workflows by 30%. | Awarded 'Best Performer' for ${secondKeyword} implementation.`;
+      return `Improved ${mainKeyword} performance by 25% through ${secondKeyword} optimization. | Recognized for ${thirdKeyword} excellence in ${mainKeyword} implementation.`;
   }
 
   return "";
@@ -206,10 +203,10 @@ module.exports = async (req, res) => {
             const original = profile.summary || "";
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `Write a professional summary for role '${jd.slice(0,50)}'. Use keywords from: "${jd.slice(0,200)}". Ignore profile if not matching JD.`;
-            // Dynamic Fallback: Use JD first word
-            const kw = extractKeywordsFromJD(jd)[0] || "Professional";
-            aiFallbacks[pid] = `<p>Aspiring ${kw} Specialist with strong academic background and relevant project experience.</p>`;
+            aiPrompts[pid] = `Write a professional 3-4 sentence summary for a FRESHER applying to this role: "${jd.slice(0,200)}". Use ONLY keywords from the JD. Make it compelling and relevant.`;
+            // Fallback uses first JD keyword
+            const kw = extractKeywordsFromJD(jd)[0] || jd.trim().split(' ')[0] || "Professional";
+            aiFallbacks[pid] = `<p>Motivated ${kw} professional with strong academic foundation and hands-on project experience in ${extractKeywordsFromJD(jd).slice(1,3).join(', ')}. Eager to contribute to organizational success.</p>`;
             aiTypes[pid] = 'summary';
         }
         else if (label === 'Technical Skills') {
@@ -218,11 +215,12 @@ module.exports = async (req, res) => {
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `Extract 12 technical skills STRICTLY from JD: "${jd.slice(0, 500)}". Add user skills (${userSkills.join(',')}) ONLY if relevant. Comma-separated.`;
+            aiPrompts[pid] = `Extract 12-15 technical skills STRICTLY from this JD: "${jd.slice(0, 600)}". User has: ${userSkills.join(',')}. Add them ONLY if relevant to JD. Return comma-separated list of ONLY JD-relevant skills.`;
             
-            // DYNAMIC FALLBACK:
+            // DYNAMIC FALLBACK: Use JD keywords as skills
             const dynamicSkills = getSmartFallback('skills', jd);
-            const combined = [...new Set([...userSkills, ...dynamicSkills])].slice(0, 15);
+            const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
+            const combined = [...new Set([...relevantUserSkills, ...dynamicSkills])].slice(0, 15);
             aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
@@ -263,12 +261,12 @@ module.exports = async (req, res) => {
              const pid = `sec_${sectionCounter++}`;
              resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
              
-             const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
+            const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
              if (projSec && projSec.items && projSec.items.length) {
                   const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
-                  aiPrompts[pid] = `Rewrite 2 projects: "${inputs}". Format: "<b>Title:</b> Desc | <b>Title:</b> Desc". Tailor to JD: "${jd.slice(0,100)}".`;
+                  aiPrompts[pid] = `Rewrite 2 projects using ONLY keywords from JD: "${jd.slice(0,300)}". Input: "${inputs}". Format: "<b>JD-Relevant Title:</b> Description | <b>Title:</b> Description".`;
              } else {
-                  aiPrompts[pid] = `Invent 2 academic projects for '${jd.slice(0,50)}'. Format: "<b>Title:</b> Desc | <b>Title:</b> Desc".`;
+                  aiPrompts[pid] = `Create 2 academic projects using ONLY these JD keywords: "${jd.slice(0,200)}". Format: "<b>Title with JD keyword:</b> Desc | <b>Title:</b> Desc".`;
              }
              
              // Dynamic Fallback
@@ -287,7 +285,7 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">Certifications</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            aiPrompts[pid] = `Invent 2 relevant certifications for '${jd.slice(0,50)}'. Format: "Cert Name | Cert Name".`;
+            aiPrompts[pid] = `Create 2 certifications using ONLY keywords from: "${jd.slice(0,200)}". Format: "Cert Name with JD keyword | Cert Name with JD keyword".`;
             aiFallbacks[pid] = getSmartFallback('certifications', jd).split('|').map(c => `<li>${c.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
@@ -295,7 +293,7 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">Achievements</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            aiPrompts[pid] = `Invent 2 academic achievements for '${jd.slice(0,50)}'. Pipe-separated.`;
+            aiPrompts[pid] = `Create 2 achievements using ONLY keywords from: "${jd.slice(0,200)}". Pipe-separated. Make them metric-driven and JD-relevant.`;
             aiFallbacks[pid] = getSmartFallback('achievements', jd).split('|').map(a => `<li>${a.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
@@ -303,10 +301,10 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `List 6 character traits for '${jd.slice(0,50)}'. Comma-separated.`;
+            aiPrompts[pid] = `List 6 character traits that match this JD: "${jd.slice(0,200)}". Comma-separated. Use ONLY JD-relevant traits.`;
             // Dynamic Traits from JD Keywords
-            const kws = extractKeywordsFromJD(jd).slice(0, 4);
-            const fallbackStr = kws.length ? kws.join(' | ') : "Fast Learner | Adaptable | Reliable";
+            const kws = extractKeywordsFromJD(jd).slice(0, 6);
+            const fallbackStr = kws.length ? kws.join(' | ') : extractKeywordsFromJD(jd).slice(0,4).join(' | ');
             aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
@@ -322,14 +320,19 @@ module.exports = async (req, res) => {
       ${resumeBodyHtml}
     </div>`;
 
-    if (Object.keys(aiPrompts).length > 0 && jd) {
+    // CRITICAL FIX: If JD is too short (< 20 chars), skip AI and use JD-derived fallbacks
+    const jdTooShort = !jd || jd.trim().length < 20;
+
+    if (Object.keys(aiPrompts).length > 0 && jd && !jdTooShort) {
         // Simple prompt to reduce load
         const prompt = `You are a Resume Content Generator. TASK: Return valid JSON. Keys: ${Object.keys(aiPrompts).join(', ')}. INSTRUCTIONS:\n${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`;
 
         try {
             const aiJsonText = await callGeminiFlash(prompt);
             let aiData = {};
-            try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); } catch (e) {}
+            try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); } catch (e) {
+                console.error('AI JSON parse failed:', e);
+            }
 
             Object.keys(aiPrompts).forEach(pid => {
                 let val = aiData[pid];
@@ -345,13 +348,17 @@ module.exports = async (req, res) => {
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(val)}</p>`);
                     }
                 } else {
+                    // AI didn't return this key, use fallback
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
                 }
             });
         } catch (e) {
+            console.error('AI call failed:', e);
             Object.keys(aiPrompts).forEach(pid => htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]));
         }
     } else {
+         // No AI call needed or JD too short - use JD-derived fallbacks
+         console.log('Using JD-derived fallbacks (JD too short or no prompts)');
          Object.keys(aiPrompts).forEach(pid => htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]));
     }
 
