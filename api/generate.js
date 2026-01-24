@@ -9,75 +9,73 @@ function slugify(s) {
   return String(s || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '');
 }
 
-// Quick JD keyword extractor
-function extractKeywords(text, limit = 6) {
-  if (!text || typeof text !== 'string') return [];
-  const stop = new Set(['the','and','to','a','an','of','in','for','with','on','as','is','are','be','by','at','from','that','this','will','have','has','role','responsibilities']);
-  const toks = text.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(Boolean);
-  const counts = {};
-  for (const t of toks) {
-    if (t.length < 3) continue;
-    if (stop.has(t)) continue;
-    counts[t] = (counts[t]||0)+1;
-  }
-  return Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,limit).map(x=>x[0]);
-}
-
-// Experience fallback: generate 3 reasonable bullets without duplicating role title
-function makeExperienceFallback(role, jd, company) {
-  const jdKeys = extractKeywords(jd, 4);
-  const top = jdKeys.join(', ') || 'relevant technologies';
-  const bullets = [];
-  bullets.push(`Contributed to ${escapeHtml(company || 'projects')} as ${escapeHtml(role)}, working with ${escapeHtml(top)} to deliver key features.`);
-  bullets.push(`Implemented and tested features, improving reliability and performance through automated tests and monitoring.`);
-  bullets.push(`Collaborated with cross-functional teams to deliver project milestones on schedule.`);
-  return bullets.map(b => `<li>${b}</li>`).join('');
-}
-
-// 1. SMART FALLBACKS (Specific, Realistic Titles)
+// --- 1. SUPER SMART FALLBACKS (The "Safety Net") ---
+// If AI fails, this logic manually looks at the JD to generate content.
 function getSmartFallback(section, jd) {
   const job = String(jd || "").toLowerCase();
   
-  // --- SKILLS ---
+  // A. SKILLS FALLBACK
   if (section === 'skills') {
-     const common = ["Problem Solving", "Git", "Communication", "Agile"];
-     if (job.includes('java')) return ["Java", "Spring Boot", "SQL", "Hibernate", "REST APIs", ...common];
-     if (job.includes('python')) return ["Python", "Django", "SQL", "Pandas", "Flask", ...common];
-     if (job.includes('react') || job.includes('front')) return ["React.js", "JavaScript", "HTML5", "CSS3", "Redux", ...common];
-     return ["Technical Skill 1", "Technical Skill 2", "SQL", "Git", "Communication", "Teamwork"];
+     // Testing / QA
+     if (job.includes('test') || job.includes('qa') || job.includes('quality')) 
+        return ["Manual Testing", "JIRA", "SQL", "Bug Reporting", "Test Cases", "Selenium", "Agile"];
+     
+     // Java
+     if (job.includes('java')) 
+        return ["Java", "Spring Boot", "Hibernate", "SQL", "Maven", "REST APIs", "Microservices"];
+     
+     // Python
+     if (job.includes('python') || job.includes('django')) 
+        return ["Python", "Django", "Flask", "SQL", "Pandas", "Git", "API Development"];
+     
+     // Web
+     if (job.includes('react') || job.includes('frontend') || job.includes('web')) 
+        return ["React.js", "JavaScript", "HTML5", "CSS3", "Redux", "Tailwind", "Responsive Design"];
+     
+     // Data
+     if (job.includes('data') || job.includes('analyst')) 
+        return ["SQL", "Excel", "PowerBI", "Python", "Data Visualization", "Statistics"];
+     
+     // Generic / Admin
+     if (job.includes('admin') || job.includes('support')) 
+        return ["Microsoft Office", "Communication", "Data Entry", "Customer Service", "Time Management"];
+     
+     // Ultimate Fallback (No "Skill 1")
+     return ["Communication", "Problem Solving", "Teamwork", "Time Management", "Project Management", "Research"];
   }
 
-  // --- CERTIFICATIONS (2 Items) ---
+  // B. CERTIFICATIONS FALLBACK
   if (section === 'certifications') {
     if (job.includes('cloud') || job.includes('aws')) return "AWS Certified Cloud Practitioner | Microsoft Certified: Azure Fundamentals";
+    if (job.includes('test') || job.includes('qa')) return "ISTQB Certified Tester Foundation Level | Certified Software Tester (CSTE)";
     if (job.includes('python')) return "PCEP – Certified Entry-Level Python Programmer | Google Data Analytics Certificate";
     if (job.includes('java')) return "Oracle Certified Associate (Java SE) | Spring Professional Certification";
-    return "Course Completion: Full Stack Development | Certificate in Professional Communication";
+    return "Certificate of Completion: Professional Skills | Advanced Excel Certification";
   }
 
-  // --- PROJECTS (2 Specific Titles) ---
+  // C. PROJECTS FALLBACK
   if (section === 'projects') {
      if (job.includes('java')) 
-        return "<b>Employee Management System:</b> Built a CRUD application using Java Swing and MySQL to track employee records. | <b>Online Bookstore:</b> Developed a RESTful API backend using Spring Boot for managing book inventory.";
+        return "<b>Employee Management System:</b> Java Swing & MySQL app for tracking records. | <b>Library API:</b> Spring Boot REST API for inventory management.";
      
+     if (job.includes('test') || job.includes('qa')) 
+        return "<b>E-Commerce Testing Suite:</b> Wrote 50+ test cases and executed manual testing cycles for a shopping cart module. | <b>Bug Tracking System:</b> Configured JIRA workflows for defect tracking and reporting.";
+
      if (job.includes('python')) 
-        return "<b>Weather Forecast App:</b> Created a CLI tool using Python and OpenWeatherMap API to fetch real-time data. | <b>Sentiment Analysis Tool:</b> Implemented a text analysis script using NLTK to classify customer reviews.";
+        return "<b>Weather App:</b> CLI tool using Python and OpenWeatherMap API. | <b>Sentiment Analysis:</b> text classification script using NLTK.";
      
-     if (job.includes('web') || job.includes('react')) 
-        return "<b>E-Commerce Dashboard:</b> Built a responsive admin panel using React.js and Redux. | <b>Personal Portfolio:</b> Designed and deployed a static website on Netlify using HTML5/CSS3.";
-     
-     return "<b>Academic Management System:</b> Designed a database schema and frontend for college operations. | <b>Task Tracker App:</b> Built a to-do list application to improve personal productivity.";
+     return "<b>Academic Management System:</b> Designed database schema for college operations. | <b>Task Tracker App:</b> Built a to-do list application to improve productivity.";
   }
 
-  // --- ACHIEVEMENTS (2 Items) ---
+  // D. ACHIEVEMENTS FALLBACK
   if (section === 'achievements') {
       return "Awarded 'Best Student Project' for final year submission among 50+ entries. | Ranked in the top 10% of participants in the Annual Coding Hackathon.";
   }
 
-  return "Relevant Achievement 1 | Relevant Achievement 2";
+  return "";
 }
 
-// 2. CANONICAL NAMES
+// 2. CANONICAL NAMES (Merges "Work" and "Experience")
 function canonicalSectionName(name) {
   const s = String(name || "").trim().toLowerCase();
   if (s.includes("work") || s.includes("experience")) return "Work Experience"; 
@@ -148,7 +146,7 @@ async function callGeminiFlash(promptText) {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
       temperature: 0.9, 
-      maxOutputTokens: 4000,
+      maxOutputTokens: 2048, // Reduced slightly to improve speed/reliability
       responseMimeType: "application/json"
     }
   };
@@ -198,7 +196,7 @@ module.exports = async (req, res) => {
     // --- SCOPE DEDUPLICATION ---
     const seen = new Set();
     const sectionsToRender = [];
-    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Projects', 'Education', 'Certifications', 'Achievements'];
+    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Character Traits'];
     
     for (const s of rawScope) {
         const c = canonicalSectionName(s);
@@ -222,27 +220,19 @@ module.exports = async (req, res) => {
     for (const secObj of sectionsToRender) {
         const label = secObj.canonical;
         
-        // --- A. SUMMARY (Integrated) ---
+        // --- A. SUMMARY ---
         if (label === 'Summary') {
             resumeBodyHtml += `<div class="resume-section-title">Summary</div>`;
             const pid = `sec_${sectionCounter++}`;
             const original = profile.summary || "";
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            // Context Awareness: Read Projects/Certs from profile to inform summary
-            const projContext = (profile.customSections||[]).filter(s=>s.title.includes('Project')).map(s=>JSON.stringify(s)).join(' ');
-            const certContext = (profile.customSections||[]).filter(s=>s.title.includes('Cert')).map(s=>JSON.stringify(s)).join(' ');
-
-            aiPrompts[pid] = `Write a professional 4-sentence summary for a Fresher '${jd.slice(0,50)}' role. 
-            Base it on: "${original}". 
-            Mention key projects/certs if they exist: ${projContext} ${certContext}. 
-            Strictly tailor to JD: "${jd.slice(0,200)}".`;
-            
-            aiFallbacks[pid] = `<p>Aspiring ${jd.slice(0,30)} with a strong academic background and project experience, eager to apply technical skills to drive organizational success.</p>`;
+            aiPrompts[pid] = `Write a professional 4-sentence summary tailored to this Job Description: "${jd.slice(0,300)}...". IGNORE profile data if it contradicts the JD. Focus on keywords from JD.`;
+            aiFallbacks[pid] = `<p>Aspiring professional looking to leverage skills in ${jd.slice(0,50)} to contribute to organizational success.</p>`;
             aiTypes[pid] = 'summary';
         }
         
-        // --- B. SKILLS (CHIPS - Min 6) ---
+        // --- B. SKILLS (CHIPS) ---
         else if (label === 'Technical Skills') {
             resumeBodyHtml += `<div class="resume-section-title">Technical Skills</div>`;
             const pid = `sec_${sectionCounter++}`;
@@ -250,11 +240,12 @@ module.exports = async (req, res) => {
             
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `List 8-12 technical skills for '${jd.slice(0,50)}'. MUST INCLUDE: ${userSkills.join(', ')}. Fill gaps using JD keywords. Return comma-separated list.`;
+            aiPrompts[pid] = `List 12-15 technical skills STRICTLY from this JD: "${jd.slice(0, 800)}". Include user's skills (${userSkills.join(', ')}) ONLY if relevant. Return comma-separated list.`;
             
             // Smart Fallback
-            const smartSkills = getSmartFallback('skills', jd);
-            const combined = [...new Set([...userSkills, ...smartSkills])].slice(0, 10);
+            const fallbackList = getSmartFallback('skills', jd);
+            // Append user skills to fallback if they match basic logic, else use JD fallback
+            const combined = [...new Set([...fallbackList])];
             aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
@@ -264,48 +255,60 @@ module.exports = async (req, res) => {
             const experienceSections = (profile.customSections || [])
                .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')));
             
+            // Deduplicate Items in Experience
+            const uniqueItems = new Map();
             if (experienceSections.length > 0) {
-                resumeBodyHtml += `<div class="resume-section-title">Work Experience</div>`;
-                for (const sec of experienceSections) {
-                    for (const item of (sec.items || [])) {
-                        const pid = `sec_${sectionCounter++}`;
-                        let companyName = sec.title.toLowerCase().includes('experience') ? "" : sec.title;
+                 experienceSections.forEach(sec => {
+                     (sec.items || []).forEach(item => {
+                         if (!uniqueItems.has(item.key)) uniqueItems.set(item.key, { item, secTitle: sec.title });
+                     });
+                 });
+            }
 
-                        resumeBodyHtml += `
-                          <div class="resume-item">
-                            <div class="resume-row">
-                              <span class="resume-role">${escapeHtml(item.key)}</span>
-                              <span class="resume-date">${escapeHtml(item.date || '')}</span>
-                            </div>
-                            ${companyName ? `<span class="resume-company">${escapeHtml(companyName)}</span>` : ''}
-                            <ul id="${pid}">[${pid}]</ul>
-                          </div>`;
-                        
-                        aiPrompts[pid] = `Rewrite bullets: "${item.bullets}". Write 3 DETAILED sentences. Tailor to JD keywords. Pipe-separated.`;
-                        aiFallbacks[pid] = makeExperienceFallback(item.key, jd, companyName);
-                        aiTypes[pid] = 'list';
-                    }
+            if (uniqueItems.size > 0) {
+                resumeBodyHtml += `<div class="resume-section-title">Work Experience</div>`;
+                for (const [key, data] of uniqueItems.entries()) {
+                    const { item, secTitle } = data;
+                    const pid = `sec_${sectionCounter++}`;
+                    let companyName = secTitle.toLowerCase().includes('experience') ? "" : secTitle;
+
+                    resumeBodyHtml += `
+                      <div class="resume-item">
+                        <div class="resume-row">
+                          <span class="resume-role">${escapeHtml(item.key)}</span>
+                          <span class="resume-date">${escapeHtml(item.date || '')}</span>
+                        </div>
+                        ${companyName ? `<span class="resume-company">${escapeHtml(companyName)}</span>` : ''}
+                        <ul id="${pid}">[${pid}]</ul>
+                      </div>`;
+                    
+                    aiPrompts[pid] = `Rewrite experience for role '${item.key}'. Write 3 DETAILED sentences using keywords from JD: "${jd.slice(0,200)}...". Return pipe-separated string.`;
+                    aiFallbacks[pid] = `<li>${escapeHtml(item.key)}</li>`;
+                    aiTypes[pid] = 'list';
                 }
             } else {
-                // If user selected Experience but has none, skip it or show empty
-                // (User prefers Project focus for fresher)
+                 // No Experience in profile? DO NOT INVENT if not asked, or invent relevant if asked.
+                 // We will invent only if explicitly in scope, but typically for freshers we skip or show "Internship"
             }
         }
 
-        // --- D. PROJECTS (Strictly 2, New Lines) ---
+        // --- D. PROJECTS (Strictly 2) ---
         else if (label === 'Projects') {
              resumeBodyHtml += `<div class="resume-section-title">Projects</div>`;
-             const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
-             
              // Setup for 2 slots
              const pid = `sec_${sectionCounter++}`;
              resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-
+             
+             // Check if user has projects
+             const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
+             
              if (projSec && projSec.items && projSec.items.length) {
-                 const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' | ');
-                 aiPrompts[pid] = `Rewrite these 2 projects: "${inputs}". Format: "<b>Title:</b> Detailed Description | <b>Title:</b> Detailed Description". Tailor to JD: "${jd.slice(0,100)}".`;
+                  // User has projects, try to use them but tailor to JD
+                  const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
+                  aiPrompts[pid] = `Rewrite these 2 projects: "${inputs}". Format: "<b>Title:</b> Desc | <b>Title:</b> Desc". Tailor to JD keywords.`;
              } else {
-                 aiPrompts[pid] = `Invent 2 academic projects for '${jd.slice(0,50)}'. Format: "<b>Title:</b> Tech stack & feature description | <b>Title:</b> Tech stack & feature description".`;
+                  // Invent
+                  aiPrompts[pid] = `Invent 2 academic projects for '${jd.slice(0,50)}'. Format: "<b>Project Name:</b> Tech stack & description | <b>Project Name:</b> Tech stack & description".`;
              }
              
              aiFallbacks[pid] = getSmartFallback('projects', jd).split('|').map(p => `<li>${p.trim()}</li>`).join('');
@@ -328,7 +331,7 @@ module.exports = async (req, res) => {
              resumeBodyHtml += `</div>`;
         }
         
-        // --- F. CERTIFICATIONS (Strictly 2) ---
+        // --- F. CERTIFICATIONS ---
         else if (label === 'Certifications') {
             resumeBodyHtml += `<div class="resume-section-title">Certifications</div>`;
             const pid = `sec_${sectionCounter++}`;
@@ -339,13 +342,13 @@ module.exports = async (req, res) => {
             aiTypes[pid] = 'list';
         }
 
-        // --- G. ACHIEVEMENTS (Strictly 2) ---
+        // --- G. ACHIEVEMENTS ---
         else if (label === 'Achievements') {
             resumeBodyHtml += `<div class="resume-section-title">Achievements</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
             
-            aiPrompts[pid] = `Invent 2 academic achievements for a fresher. Pipe-separated.`;
+            aiPrompts[pid] = `Invent 2 academic/professional achievements for '${jd.slice(0,50)}'. Pipe-separated.`;
             aiFallbacks[pid] = getSmartFallback('achievements', jd).split('|').map(a => `<li>${a.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
         }
@@ -357,7 +360,8 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
             aiPrompts[pid] = `List 6 character traits for '${jd.slice(0,50)}'. Comma-separated.`;
-            aiFallbacks[pid] = "Fast Learner | Adaptable | Reliable | Hardworking".split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
+            const fallbackStr = getSmartFallback('traits', jd);
+            aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
         }
     }
@@ -399,7 +403,7 @@ module.exports = async (req, res) => {
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
                     } 
                     else if (type === 'list') { 
-                        const lis = val.split('|').map(b => `<li>${b.trim()}</li>`).join(''); // allow inner HTML (<b>)
+                        const lis = val.split('|').map(b => `<li>${b.trim()}</li>`).join('');
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     }
                     else if (type === 'block-list') { 
