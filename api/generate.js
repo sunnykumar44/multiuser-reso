@@ -271,10 +271,11 @@ module.exports = async (req, res) => {
             const original = profile.summary || "";
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `Write a professional 3-4 sentence summary for a FRESHER applying to this role: "${jd.slice(0,200)}". Use ONLY keywords from the JD. Make it compelling and relevant.`;
+            aiPrompts[pid] = `MANDATORY: Write a professional 3-4 sentence Summary for a FRESHER applying to: "${jd.slice(0,200)}". RULES: (1) Mention key technical skills inferred from role (2) Highlight project experience (3) Show eagerness to contribute (4) NO generic statements. Use ONLY job-relevant keywords. NEVER skip this.`;
             // Fallback uses first JD keyword
-            const kw = extractKeywordsFromJD(jd)[0] || jd.trim().split(' ')[0] || "Professional";
-            aiFallbacks[pid] = `<p>Motivated ${kw} professional with strong academic foundation and hands-on project experience in ${extractKeywordsFromJD(jd).slice(1,3).join(', ')}. Eager to contribute to organizational success.</p>`;
+            const kw = extractKeywordsFromJD(jd, 'technical')[0] || jd.trim().split(' ')[0] || "Technical";
+            const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 3).join(', ');
+            aiFallbacks[pid] = `<p>Motivated ${kw} professional with strong academic foundation and hands-on project experience in ${skills}. Demonstrated ability to apply technical knowledge to real-world problems through academic projects. Eager to contribute to organizational success and grow in a challenging environment.</p>`;
             aiTypes[pid] = 'summary';
         }
         else if (label === 'Technical Skills') {
@@ -283,15 +284,15 @@ module.exports = async (req, res) => {
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `Extract 10-15 TECHNICAL skills ONLY from this JD: "${jd.slice(0, 600)}". User has: ${userSkills.join(',')}. Include programming languages, frameworks, tools, technologies. NO soft skills. Return comma-separated list. Minimum 6 technical skills.`;
+            aiPrompts[pid] = `INTELLIGENT SKILL INFERENCE: Based on role "${jd.slice(0, 100)}", infer 10-15 TECHNICAL skills that are: (1) Standard for this role (2) Include programming languages, frameworks, databases, tools (3) NOT copied verbatim from JD (4) Realistic for entry-level. User has: ${userSkills.join(',')}. Include them if relevant. Return comma-separated. Minimum 8 technical skills.`;
             
-            // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 6
+            // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 8
             const dynamicSkills = getSmartFallback('skills', jd);
             const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
             let combined = [...new Set([...relevantUserSkills, ...dynamicSkills])];
             
-            // Ensure minimum 6 technical skills
-            while (combined.length < 6) {
+            // Ensure minimum 8 technical skills
+            while (combined.length < 8) {
               const extra = extractKeywordsFromJD(jd, 'technical')[combined.length];
               if (extra && !combined.includes(extra)) combined.push(extra);
               else break;
@@ -338,15 +339,13 @@ module.exports = async (req, res) => {
              const pid = `sec_${sectionCounter++}`;
              resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
              
-            const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
+             const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
              if (projSec && projSec.items && projSec.items.length) {
                   const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
-                  aiPrompts[pid] = `Rewrite 2 projects using ONLY keywords from JD: "${jd.slice(0,300)}". Input: "${inputs}". Format: "<b>JD-Relevant Title:</b> Description | <b>Title:</b> Description".`;
+                  aiPrompts[pid] = `INTELLIGENT PROJECT GENERATION: Rewrite 2 projects that MUST: (1) Use technical skills from role "${jd.slice(0,100)}" (2) Solve real problems (3) Show measurable impact. Input: "${inputs}". Format: "<b>Project Title with Tech Stack:</b> Description with technologies and outcome | <b>Title:</b> Description". Make them connected to the role.`;
              } else {
-                  aiPrompts[pid] = `Create 2 academic projects using ONLY these JD keywords: "${jd.slice(0,200)}". Format: "<b>Title with JD keyword:</b> Desc | <b>Title:</b> Desc".`;
-             }
-             
-             // Dynamic Fallback
+                  aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${jd.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used. Format: "<b>Project Name:</b> Built using [Tech Stack] to solve [Problem]. Achieved [Result]. | <b>Project 2:</b> Description". Entry-level appropriate.`;
+             }             // Dynamic Fallback
              aiFallbacks[pid] = getSmartFallback('projects', jd).split('|').map(p => `<li>${p.trim()}</li>`).join('');
              aiTypes[pid] = 'list';
         }
@@ -406,11 +405,41 @@ module.exports = async (req, res) => {
     const jdTooShort = !jd || jd.trim().length < 20;
 
     if (Object.keys(aiPrompts).length > 0 && jd && !jdTooShort) {
-        // Simple prompt to reduce load
-        const prompt = `You are a Resume Content Generator. TASK: Return valid JSON. Keys: ${Object.keys(aiPrompts).join(', ')}. INSTRUCTIONS:\n${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`;
+        // INTELLIGENT RESUME ENGINE PROMPT
+        const intelligentPrompt = `
+You are an EXPERT RESUME INTELLIGENCE ENGINE.
+
+PRIMARY OBJECTIVE: Generate professional, ATS-friendly, logically connected resume content.
+
+JOB ROLE/DESCRIPTION: "${jd.slice(0, 800)}"
+USER PROFILE: ${JSON.stringify(profile).slice(0, 1000)}
+
+CRITICAL RULES (MANDATORY):
+1. SUMMARY IS MANDATORY - Never skip. Must align with job role and showcase skills/impact.
+2. DO NOT COPY VERBATIM from job description. INFER skills intelligently based on role.
+3. EVERYTHING MUST BE CONNECTED: Skills → Projects → Experience → Certifications.
+4. Projects MUST use the technical skills listed.
+5. Certifications MUST match skills.
+6. Achievements MUST result from projects/experience.
+7. Generate realistic, entry-level friendly content for freshers.
+
+TASK: Return valid JSON with these exact keys: ${Object.keys(aiPrompts).join(', ')}
+
+INSTRUCTIONS:
+${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
+
+ADDITIONAL INTELLIGENCE:
+- For Technical Skills: Infer core technologies for "${jd.slice(0, 50)}" role (programming languages, frameworks, databases, tools)
+- For Projects: Create 2 realistic projects that USE the technical skills and solve real problems
+- For Certifications: Suggest role-appropriate certifications (e.g., AWS, Python, Java SE)
+- For Achievements: Make them measurable and connected to skills/projects
+- For Summary: Write 3-4 sentences highlighting skills, projects, and eagerness to contribute
+
+OUTPUT: Valid JSON only. No explanations. No markdown.
+`;
 
         try {
-            const aiJsonText = await callGeminiFlash(prompt);
+            const aiJsonText = await callGeminiFlash(intelligentPrompt);
             let aiData = {};
             try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); } catch (e) {
                 console.error('AI JSON parse failed:', e);
