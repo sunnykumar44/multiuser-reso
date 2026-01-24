@@ -9,6 +9,31 @@ function slugify(s) {
   return String(s || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '');
 }
 
+// Quick JD keyword extractor
+function extractKeywords(text, limit = 6) {
+  if (!text || typeof text !== 'string') return [];
+  const stop = new Set(['the','and','to','a','an','of','in','for','with','on','as','is','are','be','by','at','from','that','this','will','have','has','role','responsibilities']);
+  const toks = text.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(Boolean);
+  const counts = {};
+  for (const t of toks) {
+    if (t.length < 3) continue;
+    if (stop.has(t)) continue;
+    counts[t] = (counts[t]||0)+1;
+  }
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,limit).map(x=>x[0]);
+}
+
+// Experience fallback: generate 3 reasonable bullets without duplicating role title
+function makeExperienceFallback(role, jd, company) {
+  const jdKeys = extractKeywords(jd, 4);
+  const top = jdKeys.join(', ') || 'relevant technologies';
+  const bullets = [];
+  bullets.push(`Contributed to ${escapeHtml(company || 'projects')} as ${escapeHtml(role)}, working with ${escapeHtml(top)} to deliver key features.`);
+  bullets.push(`Implemented and tested features, improving reliability and performance through automated tests and monitoring.`);
+  bullets.push(`Collaborated with cross-functional teams to deliver project milestones on schedule.`);
+  return bullets.map(b => `<li>${b}</li>`).join('');
+}
+
 // 1. SMART FALLBACKS (Specific, Realistic Titles)
 function getSmartFallback(section, jd) {
   const job = String(jd || "").toLowerCase();
@@ -257,7 +282,7 @@ module.exports = async (req, res) => {
                           </div>`;
                         
                         aiPrompts[pid] = `Rewrite bullets: "${item.bullets}". Write 3 DETAILED sentences. Tailor to JD keywords. Pipe-separated.`;
-                        aiFallbacks[pid] = `<li>${escapeHtml(item.key)}</li>`;
+                        aiFallbacks[pid] = makeExperienceFallback(item.key, jd, companyName);
                         aiTypes[pid] = 'list';
                     }
                 }
