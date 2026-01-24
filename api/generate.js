@@ -240,6 +240,23 @@ module.exports = async (req, res) => {
     const aiTypes = {}; 
     let sectionCounter = 0;
 
+    // CRITICAL FIX: Expand short JDs before building sections
+    let expandedJD = jd;
+    if (!jd || jd.trim().length < 50) {
+      const role = (jd || '').trim().toLowerCase();
+      if (role.includes('software') || role.includes('developer')) {
+        expandedJD = `${jd} with experience in Python, Java, JavaScript, REST APIs, SQL databases, Git version control, and Agile methodology. Strong problem-solving and communication skills required.`;
+      } else if (role.includes('data')) {
+        expandedJD = `${jd} with proficiency in Python, SQL, Pandas, NumPy, Tableau, Excel, and data visualization. Strong analytical and communication skills.`;
+      } else if (role.includes('web')) {
+        expandedJD = `${jd} with knowledge of HTML, CSS, JavaScript, React, Node.js, REST APIs, MongoDB, and Git.`;
+      } else if (role.includes('java')) {
+        expandedJD = `${jd} with Spring Boot, Hibernate, MySQL, REST APIs, Maven, Jenkins, and Git experience.`;
+      } else if (jd && jd.trim().length > 0) {
+        expandedJD = `${jd} with relevant technical skills, programming languages, frameworks, databases, and strong problem-solving abilities.`;
+      }
+    }
+
     const seen = new Set();
     const sectionsToRender = [];
     const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Certifications', 'Achievements', 'Character Traits'];
@@ -401,26 +418,7 @@ module.exports = async (req, res) => {
       ${resumeBodyHtml}
     </div>`;
 
-    // CRITICAL FIX: If JD is too short (< 50 chars), EXPAND it by inferring role requirements
-    const jdTooShort = !jd || jd.trim().length < 50;
-    let expandedJD = jd;
-    
-    if (jdTooShort && jd) {
-      // Infer full requirements based on role keywords
-      const role = jd.trim().toLowerCase();
-      if (role.includes('software') || role.includes('developer')) {
-        expandedJD = `${jd} with experience in Python, Java, JavaScript, REST APIs, SQL databases, Git version control, and Agile methodology. Strong problem-solving and communication skills required.`;
-      } else if (role.includes('data')) {
-        expandedJD = `${jd} with proficiency in Python, SQL, Pandas, NumPy, Tableau, Excel, and data visualization. Strong analytical and communication skills.`;
-      } else if (role.includes('web')) {
-        expandedJD = `${jd} with knowledge of HTML, CSS, JavaScript, React, Node.js, REST APIs, MongoDB, and Git.`;
-      } else if (role.includes('java')) {
-        expandedJD = `${jd} with Spring Boot, Hibernate, MySQL, REST APIs, Maven, Jenkins, and Git experience.`;
-      } else {
-        expandedJD = `${jd} with relevant technical skills, programming languages, frameworks, databases, and strong problem-solving abilities.`;
-      }
-    }
-
+    // 3. CALL AI (expandedJD already declared above)
     if (Object.keys(aiPrompts).length > 0 && expandedJD) {
         // INTELLIGENT RESUME ENGINE PROMPT
         const intelligentPrompt = `
