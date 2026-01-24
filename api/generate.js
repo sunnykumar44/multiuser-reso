@@ -502,7 +502,7 @@ module.exports = async (req, res) => {
                   aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${finalJD.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used. Format: "<b>Project Name:</b> Built using [Tech Stack] to solve [Problem]. Achieved [Result]. | <b>Project 2:</b> Description". Entry-level appropriate.`;
                   aiLabels[pid] = 'Projects';
              }             // Dynamic Fallback
-             aiFallbacks[pid] = getSmartFallback('projects', jd).split('|').map(p => `<li>${p.trim()}</li>`).join('');
+             aiFallbacks[pid] = getSmartFallback('projects', finalJD).split('|').map(p => `<li>${p.trim()}</li>`).join('');
              aiTypes[pid] = 'list';
         }
         else if (label === 'Education') {
@@ -562,9 +562,36 @@ module.exports = async (req, res) => {
 
     // 3. CALL AI (finalJD already declared above)
     const debug = { attempts: [], usedFallbackFor: [], finalJD };
+    // Build intelligent prompt once (must exist before retries)
+    const intelligentPrompt = `
+You are an EXPERT RESUME INTELLIGENCE ENGINE.
+
+PRIMARY OBJECTIVE: Generate professional, ATS-friendly, logically connected resume content.
+
+JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1000)}"
+USER PROFILE: ${JSON.stringify(profile).slice(0, 1000)}
+
+CRITICAL RULES (MANDATORY):
+1. SUMMARY IS MANDATORY - Never skip. Must align with job role and showcase skills/impact.
+2. DO NOT COPY VERBATIM from job description. INFER skills intelligently based on role.
+3. EVERYTHING MUST BE CONNECTED: Skills → Projects → Experience → Certifications → Achievements.
+4. Projects MUST use the technical skills listed AND solve real problems.
+5. Certifications MUST match the technical skills and be realistic.
+6. Achievements MUST be specific and measurable.
+7. Generate realistic, entry-level friendly content for freshers.
+8. NO PLACEHOLDERS like "Skill 3".
+
+TASK: Return valid JSON with these exact keys: ${Object.keys(aiPrompts).join(', ')}
+
+INSTRUCTIONS:
+${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
+
+OUTPUT: Valid JSON only. No explanations. No markdown.
+`;
+
     if (Object.keys(aiPrompts).length > 0 && finalJD) {
         // try AI with retries for short JD to encourage variability
-        const temps = (finalJD && finalJD.trim().length < 50) ? [0.6, 0.85] : [0.6];
+        const temps = (finalJD && finalJD.trim().length < 50) ? [0.7, 0.85, 0.95] : [0.6, 0.75];
         let aiData = null;
         let lastError = null;
         for (const t of temps) {
@@ -572,7 +599,7 @@ module.exports = async (req, res) => {
                 const seed = Math.random().toString(36).substring(2,8);
                 const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed} (Produce a realistic, role-aligned but distinct variation)`;
                 const aiJsonText = await callGeminiFlash(prompt, { temperature: t, maxOutputTokens: 3000 });
-                try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); console.warn('AI JSON parse failed on attempt', t, e); }
+                try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
                 if (aiData) break;
             } catch (e) {
                 lastError = e;
@@ -589,7 +616,7 @@ module.exports = async (req, res) => {
                 const type = aiTypes[pid];
                 const label = aiLabels[pid] || '';
                 if (!val || typeof val !== 'string' || val.trim().length < 2) {
-                    const dynamic = dynamicFallbackFor(type, label, rolePreset, Array.isArray(profile.skills) ? profile.skills : []);
+                    const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
                     debug.usedFallbackFor.push(pid);
                     return;
@@ -607,7 +634,7 @@ module.exports = async (req, res) => {
                     for (const pick of shuffled) { if (techParts.length >= 8) break; if (!techParts.includes(pick)) techParts.push(pick); }
                     if (techParts.length < 8) {
                         // fallback using dynamic fallback
-                        const dynamic = dynamicFallbackFor(type, label, rolePreset, Array.isArray(profile.skills) ? profile.skills : []);
+                        const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
                         debug.usedFallbackFor.push(pid);
                         return;
@@ -695,7 +722,7 @@ module.exports = async (req, res) => {
 
 function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
 
-function dynamicFallbackFor(type, label, rolePreset, userSkills = []) {
+function dynamicFallbackFor(type, label, rolePreset, finalJD, userSkills = []) {
   if (type === 'chips' && label === 'Technical Skills') {
     const pool = [...new Set([...(userSkills||[]), ...(rolePreset.skills||[])])];
     const chosen = shuffle(pool).slice(0, 10);
@@ -721,6 +748,5 @@ function dynamicFallbackFor(type, label, rolePreset, userSkills = []) {
     const chosen = shuffle(pool.slice()).slice(0,2).map(a => a.includes('%') ? a : `${a} (${randomPercent()}% improvement)`);
     return chosen.map(a=>`<li>${escapeHtml(a)}</li>`).join('');
   }
-  // default fallback
   return '';
 }
