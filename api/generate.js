@@ -422,7 +422,7 @@ module.exports = async (req, res) => {
             const original = profile.summary || "";
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `MANDATORY: Write a professional 3-4 sentence Summary for a FRESHER applying to: "${jd.slice(0,200)}". RULES: (1) Mention key technical skills inferred from role (2) Highlight project experience (3) Show eagerness to contribute (4) NO generic statements. Use ONLY job-relevant keywords. NEVER skip this.`;
+            aiPrompts[pid] = `MANDATORY: Write a professional 3-4 sentence Summary for a FRESHER applying to: "${finalJD.slice(0,200)}". RULES: (1) Mention key technical skills inferred from role (2) Highlight project experience (3) Show eagerness to contribute (4) NO generic statements. Use ONLY job-relevant keywords. NEVER skip this.`;
             // Fallback uses first JD keyword
             const kw = extractKeywordsFromJD(jd, 'technical')[0] || jd.trim().split(' ')[0] || "Technical";
             const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 3).join(', ');
@@ -436,7 +436,7 @@ module.exports = async (req, res) => {
             const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
             
-            aiPrompts[pid] = `INTELLIGENT SKILL INFERENCE: Based on role "${jd.slice(0, 100)}", infer 10-15 TECHNICAL skills that are: (1) Standard for this role (2) Include programming languages, frameworks, databases, tools (3) NOT copied verbatim from JD (4) Realistic for entry-level. User has: ${userSkills.join(',')}. Include them if relevant. Return comma-separated. Minimum 8 technical skills.`;
+            aiPrompts[pid] = `INTELLIGENT SKILL INFERENCE: Based on role "${finalJD.slice(0, 100)}", infer 10-15 TECHNICAL skills that are: (1) Standard for this role (2) Include programming languages, frameworks, databases, tools (3) NOT copied verbatim from JD (4) Realistic for entry-level. User has: ${userSkills.join(',')}. Include them if relevant. Return comma-separated. Minimum 8 technical skills.`;
             
             // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 8
             const dynamicSkills = getSmartFallback('skills', jd);
@@ -481,7 +481,7 @@ module.exports = async (req, res) => {
                         ${companyName ? `<span class="resume-company">${escapeHtml(companyName)}</span>` : ''}
                         <ul id="${pid}">[${pid}]</ul>
                       </div>`;
-                    aiPrompts[pid] = `Rewrite experience: "${item.bullets}". Write 2 concise sentences using keywords: "${jd.slice(0,200)}...". Pipe-separated.`;
+                    aiPrompts[pid] = `Rewrite experience: "${item.bullets}". Write 2 concise sentences using keywords: "${finalJD.slice(0,200)}...". Pipe-separated.`;
                     aiFallbacks[pid] = `<li>${escapeHtml(item.key)}</li>`;
                     aiTypes[pid] = 'list';
                     aiLabels[pid] = 'Work Experience';
@@ -496,10 +496,10 @@ module.exports = async (req, res) => {
              const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
              if (projSec && projSec.items && projSec.items.length) {
                   const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
-                  aiPrompts[pid] = `INTELLIGENT PROJECT GENERATION: Rewrite 2 projects that MUST: (1) Use technical skills from role "${jd.slice(0,100)}" (2) Solve real problems (3) Show measurable impact. Input: "${inputs}". Format: "<b>Project Title with Tech Stack:</b> Description with technologies and outcome | <b>Title:</b> Description". Make them connected to the role.`;
+                  aiPrompts[pid] = `INTELLIGENT PROJECT GENERATION: Rewrite 2 projects that MUST: (1) Use technical skills from role "${finalJD.slice(0,100)}" (2) Solve real problems (3) Show measurable impact. Input: "${inputs}". Format: "<b>Project Title with Tech Stack:</b> Description with technologies and outcome | <b>Title:</b> Description". Make them connected to the role.`;
                   aiLabels[pid] = 'Projects';
              } else {
-                  aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${jd.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used. Format: "<b>Project Name:</b> Built using [Tech Stack] to solve [Problem]. Achieved [Result]. | <b>Project 2:</b> Description". Entry-level appropriate.`;
+                  aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${finalJD.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used. Format: "<b>Project Name:</b> Built using [Tech Stack] to solve [Problem]. Achieved [Result]. | <b>Project 2:</b> Description". Entry-level appropriate.`;
                   aiLabels[pid] = 'Projects';
              }             // Dynamic Fallback
              aiFallbacks[pid] = getSmartFallback('projects', jd).split('|').map(p => `<li>${p.trim()}</li>`).join('');
@@ -535,7 +535,7 @@ module.exports = async (req, res) => {
             resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `List 6-8 SOFT SKILLS/character traits from this JD: "${jd.slice(0,200)}". Examples: Communication, Teamwork, Leadership, Problem Solving. Comma-separated. NO technical skills. Minimum 6.`;
+            aiPrompts[pid] = `List 6-8 SOFT SKILLS/character traits from this JD: "${finalJD.slice(0,200)}". Examples: Communication, Teamwork, Leadership, Problem Solving. Comma-separated. NO technical skills. Minimum 6.`;
             
             // Dynamic Traits from JD SOFT SKILL Keywords - ensure minimum 6
             let kws = extractKeywordsFromJD(jd, 'soft').slice(0, 8);
@@ -561,6 +561,7 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
+    const debug = { attempts: [], usedFallbackFor: [], finalJD };
     if (Object.keys(aiPrompts).length > 0 && finalJD) {
         // try AI with retries for short JD to encourage variability
         const temps = (finalJD && finalJD.trim().length < 50) ? [0.6, 0.85] : [0.6];
@@ -571,10 +572,11 @@ module.exports = async (req, res) => {
                 const seed = Math.random().toString(36).substring(2,8);
                 const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed} (Produce a realistic, role-aligned but distinct variation)`;
                 const aiJsonText = await callGeminiFlash(prompt, { temperature: t, maxOutputTokens: 3000 });
-                try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); } catch (e) { aiData = null; console.warn('AI JSON parse failed on attempt', t, e); }
+                try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); console.warn('AI JSON parse failed on attempt', t, e); }
                 if (aiData) break;
             } catch (e) {
                 lastError = e;
+                debug.attempts.push({ temp: t, parsed: false, error: e.message });
                 console.warn('AI attempt failed at temp', t, e);
             }
         }
@@ -589,6 +591,7 @@ module.exports = async (req, res) => {
                 if (!val || typeof val !== 'string' || val.trim().length < 2) {
                     const dynamic = dynamicFallbackFor(type, label, rolePreset, Array.isArray(profile.skills) ? profile.skills : []);
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+                    debug.usedFallbackFor.push(pid);
                     return;
                 }
 
@@ -599,10 +602,15 @@ module.exports = async (req, res) => {
                     let techParts = parts.filter(p => isLikelyTechnical(p));
                     // also allow rolePreset matches
                     techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
-                    // add random preset skills to reach minimum
-                    while (techParts.length < 8) {
-                        const pick = randomFrom(rolePreset.skills || []);
-                        if (!techParts.includes(pick)) techParts.push(pick);
+                    // add random preset skills to reach minimum using shuffled presets
+                    const shuffled = shuffle((rolePreset.skills || []).slice());
+                    for (const pick of shuffled) { if (techParts.length >= 8) break; if (!techParts.includes(pick)) techParts.push(pick); }
+                    if (techParts.length < 8) {
+                        // fallback using dynamic fallback
+                        const dynamic = dynamicFallbackFor(type, label, rolePreset, Array.isArray(profile.skills) ? profile.skills : []);
+                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+                        debug.usedFallbackFor.push(pid);
+                        return;
                     }
                     const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
@@ -670,15 +678,15 @@ module.exports = async (req, res) => {
             });
         } catch (e) {
             console.error('AI processing failed:', e);
-            Object.keys(aiPrompts).forEach(pid => htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]));
+            Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
         }
     } else {
          // No AI call needed or JD too short - use JD-derived fallbacks
          console.log('Using JD-derived fallbacks (JD too short or no prompts)');
-         Object.keys(aiPrompts).forEach(pid => htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]));
+         Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
     }
 
-    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton } });
+    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
   } catch (err) {
     return res.status(500).json({ error: err.message });
