@@ -146,7 +146,7 @@ function getSmartFallback(section, jd, rand = Math.random) {
     let skills = extractKeywordsFromJD(jd, 'technical').slice(0, 6);
     const pool = shuffleSeeded((rolePreset.skills || []).slice(), rand);
     for (const p of pool) { if (skills.length >= 12) break; if (!skills.includes(p)) skills.push(p); }
-    return skills;
+    return dedupeSkillsLike(skills);
   }
   if (section === 'certifications') return dynamicCerts(rolePreset, rand).join(' | ');
   if (section === 'projects') return dynamicProjects(rolePreset, rand).join(' | ');
@@ -280,6 +280,41 @@ const ROLE_PRESETS = {
 const TECH_TOKENS = [
   'python','java','javascript','typescript','c++','c#','ruby','php','go','rust','scala','kotlin','swift','r','matlab','perl','bash','django','flask','spring','react','angular','node','express','postgresql','mysql','mongodb','redis','aws','azure','gcp','docker','kubernetes','git','jenkins','terraform','pandas','numpy','tableau','powerbi','sql','rest','api','graphql','kafka','rabbitmq'
 ];
+
+// Normalize common technical skill variants so we can dedupe better (e.g., "ETL" vs "ETL Processes")
+function normalizeSkillToken(s) {
+  const raw = String(s || '').trim();
+  if (!raw) return '';
+  const t = raw.toLowerCase();
+
+  // Canonicalize frequent variants
+  if (/^etl(\s+processes|\s+principles)?$/.test(t)) return 'ETL';
+  if (/^(version\s*control\s*\(git\)|git\s+version\s+control)$/.test(t)) return 'Git';
+  if (/^jupyter(\s+notebooks)?$/.test(t)) return 'Jupyter Notebooks';
+  if (/^sql$/.test(t)) return 'SQL';
+  if (/^(postgresql|postgre\s*sql)$/.test(t)) return 'PostgreSQL';
+  if (/^mysql$/.test(t)) return 'MySQL';
+  if (/^aws\s*s3$/.test(t)) return 'AWS S3';
+  if (/^bigquery$/.test(t)) return 'BigQuery';
+  if (/^power\s*bi$/.test(t)) return 'PowerBI';
+
+  // Title-case fallback
+  return raw.length <= 4 ? raw.toUpperCase() : raw;
+}
+
+function dedupeSkillsLike(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const x of (arr || [])) {
+    const canon = normalizeSkillToken(x);
+    if (!canon) continue;
+    const k = canon.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(canon);
+  }
+  return out;
+}
 
 function getRolePreset(jd) {
   if (!jd || !jd.trim()) return ROLE_PRESETS['default'];
@@ -573,6 +608,13 @@ module.exports = async (req, res) => {
     const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
     const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
 
+    // Normalize and dedupe incoming skills ("Python pre-processing" but on the server)
+    if (profile && Array.isArray(profile.skills)) {
+      profile.skills = dedupeSkillsLike(profile.skills);
+    } else if (profile && typeof profile.skills === 'string') {
+      profile.skills = dedupeSkillsLike(profile.skills.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean));
+    }
+
     // Normalize JD to handle typos before any logic
     let jdNormalized = normalizeJD(jd);
     let jdWasInferred = false;
@@ -677,16 +719,19 @@ module.exports = async (req, res) => {
             // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 8
             const dynamicSkills = getSmartFallback('skills', finalJD, rand);
             const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
-            let combined = [...new Set([...relevantUserSkills, ...dynamicSkills])];
+            let combined = dedupeSkillsLike([...relevantUserSkills, ...dynamicSkills]);
             
-            // Ensure minimum 8 technical skills
-            while (combined.length < 8) {
-              const extra = extractKeywordsFromJD(jd, 'technical')[combined.length];
-              if (extra && !combined.includes(extra)) combined.push(extra);
-              else break;
-            }
-            
-            combined = combined.slice(0, 15);
+             // Ensure minimum 8 technical skills
+             while (combined.length < 8) {
+               const extra = extractKeywordsFromJD(jd, 'technical')[combined.length];
+               if (extra) {
+                 const next = normalizeSkillToken(extra);
+                 if (next && !combined.some(x => x.toLowerCase() === next.toLowerCase())) combined.push(next);
+               }
+               else break;
+             }
+             
+            combined = dedupeSkillsLike(combined).slice(0, 15);
             aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
             aiLabels[pid] = 'Technical Skills';
@@ -732,12 +777,13 @@ module.exports = async (req, res) => {
              const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
              if (projSec && projSec.items && projSec.items.length) {
                   const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
-                  aiPrompts[pid] = `INTELLIGENT PROJECT GENERATION: Rewrite 2 projects that MUST: (1) Use technical skills from role "${finalJD.slice(0,100)}" (2) Solve real problems (3) Show measurable impact. Input: "${inputs}". Format: "<b>Project Title with Tech Stack:</b> Description with technologies and outcome | <b>Title:</b> Description". Make them connected to the role.`;
+                  aiPrompts[pid] = `INTELLIGENT PROJECT GENERATION: Rewrite 2 projects that MUST: (1) Use technical skills from role "${finalJD.slice(0,100)}" (2) Solve real problems (3) Show measurable impact. CRITICAL VARIETY: pick TWO DIFFERENT domains/industries from this set: FinTech, Healthcare, Retail, Logistics, Manufacturing, Education, Telecom, Travel, Energy. Do NOT use the same domain twice. Avoid repeating common topics like "sales dashboard" and "customer churn" unless explicitly in the input. Input: "${inputs}". Format: "<b>Project Title with Tech Stack:</b> Description with technologies and outcome | <b>Title:</b> Description". Make them connected to the role.`;
                   aiLabels[pid] = 'Projects';
              } else {
-                  aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${finalJD.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used. Format: "<b>Project Name:</b> Built using [Tech Stack] to solve [Problem]. Achieved [Result]. | <b>Project 2:</b> Description". Entry-level appropriate.`;
+                  aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${finalJD.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used (4) MUST include measurable outcome. CRITICAL VARIETY: pick TWO DIFFERENT industries/domains from: FinTech, Healthcare, Retail, Logistics, Manufacturing, Education, Telecom, Travel, Energy. Do NOT use the same domain twice. Avoid defaulting to "Sales" or "Customer Churn" topics. Format: "<b>Project Name (Domain + Tech Stack):</b> Description with technologies and outcome | <b>Project 2 (Domain + Tech Stack):</b> Description". Entry-level appropriate.`;
                   aiLabels[pid] = 'Projects';
-             }             // Dynamic Fallback
+             }
+             // Dynamic Fallback
              aiFallbacks[pid] = getSmartFallback('projects', finalJD, rand).split('|').map(p => `<li>${p.trim()}</li>`).join('');
              aiTypes[pid] = 'list';
         }
@@ -882,27 +928,32 @@ OUTPUT: JSON only. No markdown.
                   // SKILLS: augment instead of replacing completely
                 if (type === 'chips' && label === 'Technical Skills') {
                     let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
-                    // keep only likely technical tokens, else augment
+                    parts = parts.map(normalizeSkillToken).filter(Boolean);
+                     // keep only likely technical tokens, else augment
                     let techParts = parts.filter(p => isLikelyTechnical(p));
                     // also allow rolePreset matches
                     techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
                     // add random preset skills to reach minimum using shuffled presets
                     const shuffled = shuffle((rolePreset.skills || []).slice());
-                    for (const pick of shuffled) { if (techParts.length >= 12) break; if (!techParts.some(x => x.toLowerCase() === pick.toLowerCase())) techParts.push(pick); }
+                    for (const pick of shuffled) {
+                      if (techParts.length >= 12) break;
+                      const canonPick = normalizeSkillToken(pick);
+                      if (canonPick && !techParts.some(x => x.toLowerCase() === canonPick.toLowerCase())) techParts.push(canonPick);
+                    }
 
-                    techParts = uniqCaseInsensitive(techParts);
-                    // Reorder with request-seeded randomness so even similar sets render differently
-                    techParts = shuffleSeeded(techParts, rand);
-                    if (techParts.length < 8) {
-                        // fallback using dynamic fallback
-                        const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
-                        debug.usedFallbackFor.push(pid);
-                        return;
+                    techParts = dedupeSkillsLike(techParts);
+                     // Reorder with request-seeded randomness so even similar sets render differently
+                     techParts = shuffleSeeded(techParts, rand);
+                     if (techParts.length < 8) {
+                       // fallback using dynamic fallback
+                       const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
+                       htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+                       debug.usedFallbackFor.push(pid);
+                       return;
                      }
-                    const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    return;
+                     const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                     return;
                 }
 
                 // TRAITS (soft chips)
