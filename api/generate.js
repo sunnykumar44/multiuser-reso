@@ -321,8 +321,33 @@ function augmentAchievements(parts, rolePreset) {
 async function callGeminiFlash(promptText, opts = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
   
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const base = `https://generativelanguage.googleapis.com/v1beta`;
+  const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
   
+  async function listModels() {
+    const resp = await fetch(`${base}/models?${keyQs}`, { method: 'GET' });
+    if (!resp.ok) return null;
+    const j = await resp.json().catch(() => null);
+    return j;
+  }
+  
+  async function pickModel() {
+    // Prefer flash-capable models if available
+    const fallback = [
+      'models/gemini-1.5-flash-002',
+      'models/gemini-1.5-flash',
+      'models/gemini-1.5-pro',
+      'models/gemini-1.0-pro'
+    ];
+    const j = await listModels();
+    const names = (j && Array.isArray(j.models)) ? j.models.map(m => m.name).filter(Boolean) : [];
+    if (!names.length) return fallback;
+    const preferred = names.filter(n => n.includes('gemini') && (n.includes('flash') || n.includes('pro')));
+    return preferred.length ? preferred : fallback;
+  }
+
+  const candidatesModels = await pickModel();
+ 
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
@@ -332,22 +357,32 @@ async function callGeminiFlash(promptText, opts = {}) {
     }
   };
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let lastErr = null;
+  for (const modelName of candidatesModels) {
+    const url = `${base}/${modelName}:generateContent?${keyQs}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
 
-  if (!resp.ok) {
-    const txt = await resp.text().catch(() => '');
-    throw new Error(`Gemini API failed ${resp.status}: ${txt}`);
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
+      // try next model on 404/400
+      continue;
+    }
+
+    const j = await resp.json();
+    const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!candidate) {
+      lastErr = new Error('No response from AI');
+      continue;
+    }
+    return candidate;
   }
-  
-  const j = await resp.json();
-  const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!candidate) throw new Error("No response from AI");
-  
-  return candidate;
+
+  throw lastErr || new Error('Gemini API failed');
 }
 
 module.exports = async (req, res) => {
