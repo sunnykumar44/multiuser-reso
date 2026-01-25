@@ -719,10 +719,6 @@ if (btnGen) {
     saveDraft(draft);
 
     renderWithDraft();
-    // record generation in history manager
-    if (typeof History.addHistoryItem === 'function') {
-      History.addHistoryItem({ jd, mode, template, name: nickname || '' });
-    }
     setStatus(`Generated (draft). AI scope: ${scope.join(", ") || "None"}`, "ok");
   });
 }

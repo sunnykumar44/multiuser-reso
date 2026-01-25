@@ -26,16 +26,43 @@ export function initHistoryManager(nickname, onSelect) {
 
 export function addHistoryItem({ jd = '', mode = '', template = '', name = '' } = {}) {
   if (!currentNickname) return;
+  const full = String(jd || '').trim();
+  // Prevent blank/accidental entries
+  if (!full) return;
   try {
     const all = readAll();
     const others = all.filter(x => x.nickname !== currentNickname);
     const own = all.filter(x => x.nickname === currentNickname) || [];
 
+    // De-dupe: same JD+mode+template should not be added again
+    const sig = `${full}||${String(mode || '')}||${String(template || '')}`;
+    const existing = own.find(x => {
+      const exFull = String(x.fullJd || '').trim();
+      const exSig = `${exFull}||${String(x.mode || '')}||${String(x.template || '')}`;
+      return exSig === sig;
+    });
+    if (existing) {
+      // If it already exists, bump it to the top and refresh date
+      const bumped = {
+        ...existing,
+        date: new Date().toLocaleString(),
+        jd: full.substring(0, 40) + (full.length > 40 ? '...' : ''),
+        fullJd: full,
+        mode: mode || existing.mode || '',
+        template: template || existing.template || '',
+        name: (name || existing.name || currentNickname)
+      };
+      const newOwn = [bumped, ...own.filter(x => x.id !== existing.id)].slice(0, 8);
+      writeAll([...newOwn, ...others]);
+      render();
+      return;
+    }
+
     const item = {
       id: Date.now(),
       date: new Date().toLocaleString(),
-      jd: (jd || '').substring(0, 40) + (jd && jd.length > 40 ? '...' : ''),
-      fullJd: jd || '',
+      jd: full.substring(0, 40) + (full.length > 40 ? '...' : ''),
+      fullJd: full,
       mode: mode || '',
       template: template || '',
       nickname: currentNickname,
