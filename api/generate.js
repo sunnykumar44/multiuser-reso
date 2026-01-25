@@ -1,6 +1,53 @@
 const { saveHistory } = require("./firebase");
 const crypto = require('crypto');
 
+// Simple in-memory daily limiter (resets when date changes; per server instance)
+const DAILY_LIMIT = Number(process.env.DAILY_LIMIT || 20);
+globalThis.__DAILY_LIMIT_STATE__ = globalThis.__DAILY_LIMIT_STATE__ || { date: null, byUser: new Map() };
+
+function todayUtc() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+}
+
+function getUserKey(body, req) {
+  // Prefer explicit userId; else email; else nickname; else IP.
+  const p = (body && body.profile && typeof body.profile === 'object') ? body.profile : {};
+  return String(body?.userId || p.email || body?.nickname || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'anonymous');
+}
+
+function consumeOne(userKey) {
+  const state = globalThis.__DAILY_LIMIT_STATE__;
+  const d = todayUtc();
+  if (state.date !== d) {
+    state.date = d;
+    state.byUser = new Map();
+  }
+  const used = Number(state.byUser.get(userKey) || 0);
+  if (used >= DAILY_LIMIT) return { ok: false, remaining: 0, used, limit: DAILY_LIMIT, date: state.date };
+  state.byUser.set(userKey, used + 1);
+  return { ok: true, remaining: DAILY_LIMIT - (used + 1), used: used + 1, limit: DAILY_LIMIT, date: state.date };
+}
+
+function getRemaining(userKey) {
+  const state = globalThis.__DAILY_LIMIT_STATE__;
+  const d = todayUtc();
+  if (state.date !== d) {
+    return { remaining: DAILY_LIMIT, used: 0, limit: DAILY_LIMIT, date: d };
+  }
+  const used = Number(state.byUser.get(userKey) || 0);
+  return { remaining: Math.max(DAILY_LIMIT - used, 0), used, limit: DAILY_LIMIT, date: state.date };
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function parseRetryDelayMs(txt) {
+  const m = String(txt || '').match(/"retryDelay"\s*:\s*"(\d+)s"/);
+  if (m && m[1]) return Number(m[1]) * 1000;
+  const m2 = String(txt || '').match(/retry in\s+(\d+)/i);
+  if (m2 && m2[1]) return Number(m2[1]) * 1000;
+  return 0;
+}
+
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
 // Extracts meaningful technical and soft skills from JD
 function extractKeywordsFromJD(jd, type = 'all') {
@@ -277,7 +324,7 @@ function mulberry32(seed) {
 function shuffleSeeded(arr, rand) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
+    [arr[i], arr[j] ] = [arr[j], arr[i]];
   }
   return arr;
 }
@@ -320,40 +367,55 @@ function augmentAchievements(parts, rolePreset) {
 
 async function callGeminiFlash(promptText, opts = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
-  
+
   const base = `https://generativelanguage.googleapis.com/v1beta`;
   const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  
+
+  // Cache model choice for this server instance to avoid ListModels on every request
+  globalThis.__GEMINI_TEXT_MODELS__ = globalThis.__GEMINI_TEXT_MODELS__ || null;
+
   async function listModels() {
     const resp = await fetch(`${base}/models?${keyQs}`, { method: 'GET' });
     if (!resp.ok) return null;
     const j = await resp.json().catch(() => null);
     return j;
   }
-  
-  async function pickModel() {
-    // Prefer flash-capable models if available
+
+  async function pickModels() {
     const fallback = [
       'models/gemini-1.5-flash-002',
       'models/gemini-1.5-flash',
       'models/gemini-1.5-pro',
       'models/gemini-1.0-pro'
     ];
+
+    if (Array.isArray(globalThis.__GEMINI_TEXT_MODELS__) && globalThis.__GEMINI_TEXT_MODELS__.length) {
+      return globalThis.__GEMINI_TEXT_MODELS__;
+    }
+
     const j = await listModels();
-    const names = (j && Array.isArray(j.models)) ? j.models.map(m => m.name).filter(Boolean) : [];
-    if (!names.length) return fallback;
-    const preferred = names.filter(n => n.includes('gemini') && (n.includes('flash') || n.includes('pro')));
-    return preferred.length ? preferred : fallback;
+    const models = (j && Array.isArray(j.models)) ? j.models : [];
+    const names = models.map(m => m && m.name).filter(Boolean);
+    if (!names.length) {
+      globalThis.__GEMINI_TEXT_MODELS__ = fallback;
+      return fallback;
+    }
+
+    // Exclude image/vision models
+    const textOnly = names.filter(n => n.includes('gemini') && !n.includes('image') && !n.includes('vision'));
+    const preferred = textOnly.filter(n => n.includes('flash') || n.includes('pro'));
+    const picked = preferred.length ? preferred : (textOnly.length ? textOnly : fallback);
+    globalThis.__GEMINI_TEXT_MODELS__ = picked;
+    return picked;
   }
 
-  const candidatesModels = await pickModel();
- 
+  const candidatesModels = await pickModels();
+
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
       temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.9,
       topP: typeof opts.topP === 'number' ? opts.topP : 0.95,
-      // presencePenalty/frequencyPenalty are tolerated by some endpoints; safe to include
       presencePenalty: typeof opts.presencePenalty === 'number' ? opts.presencePenalty : 0.6,
       frequencyPenalty: typeof opts.frequencyPenalty === 'number' ? opts.frequencyPenalty : 0.4,
       maxOutputTokens: opts.maxOutputTokens || 2600,
@@ -372,8 +434,17 @@ async function callGeminiFlash(promptText, opts = {}) {
 
     if (!resp.ok) {
       const txt = await resp.text().catch(() => '');
+      
+      // Optional single retry on 429 (rate limit) honoring retryDelay
+      if (resp.status === 429 && !opts.__retriedOnce) {
+        const ms = parseRetryDelayMs(txt);
+        if (ms > 0 && ms <= 30000) {
+          await sleep(ms);
+          return callGeminiFlash(promptText, { ...opts, __retriedOnce: true });
+        }
+      }
+      
       lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
-      // try next model on 404/400
       continue;
     }
 
@@ -404,8 +475,12 @@ module.exports = async (req, res) => {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
     const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
     const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
+    
+    const userKey = getUserKey({ ...body, profile }, req);
+    const remainingInfo = getRemaining(userKey);
+
     if (!jd || typeof jd !== 'string' || !jd.trim()) {
-      return res.status(400).json({ ok: false, error: 'Missing required field: jd', debug: { requestSeed, aiEnabled: !!GEMINI_API_KEY, aiOnly } });
+      return res.status(400).json({ ok: false, error: 'Missing required field: jd', debug: { requestSeed, aiEnabled: !!GEMINI_API_KEY, aiOnly, daily: remainingInfo } });
     }
 
     const name = (profile.fullName || nickname || "User").toUpperCase();
@@ -612,7 +687,7 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed };
+    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo };
 
     // Build intelligentPrompt (required for AI path)
     const intelligentPrompt = `
@@ -644,6 +719,17 @@ OUTPUT: JSON only. No markdown.
 `;
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
+        // Enforce local daily limit only when AI is requested
+        const ticket = consumeOne(userKey);
+        debug.daily = ticket;
+        if (!ticket.ok) {
+          return res.status(429).json({
+            ok: false,
+            error: `Daily limit reached (${ticket.limit}/day). Try again after UTC reset.`,
+            debug
+          });
+        }
+        
         // try AI with retries for short JD to encourage variability
         const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
         let aiData = null;
@@ -759,7 +845,11 @@ OUTPUT: JSON only. No markdown.
         } catch (e) {
             console.error('AI processing failed:', e);
             if (aiOnly) {
-              return res.status(503).json({ ok: false, error: e.message || 'AI failed', debug });
+              const msg = String(e.message || 'AI failed');
+              if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+                return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
+              }
+              return res.status(503).json({ ok: false, error: msg, debug });
             }
             Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
         }
