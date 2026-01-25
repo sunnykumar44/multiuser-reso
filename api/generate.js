@@ -808,3 +808,11 @@ function dynamicExperienceBullet(role, rolePreset, rand = Math.random) {
    const outcomes = ['improving workflow efficiency by ~15%', 'reducing processing latency', 'enhancing system reliability', 'supporting data-driven decision making', 'streamlining internal processes'];
    return `${randomFromSeeded(actions, rand)} ${role} components using ${techs.join(' and ')}, ${randomFromSeeded(outcomes, rand)}.`;
 }
+
+function randomFrom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function randomPercent(min = 10, max = 40) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
