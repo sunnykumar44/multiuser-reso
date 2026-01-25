@@ -173,6 +173,8 @@ function canonicalSectionName(name) {
 
 // --- CONSTANTS ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY || process.env.GCP_API_KEY;
+// Optional: prefer a specific Gemini model first (e.g., "models/gemini-3-flash-preview")
+const GEMINI_MODEL_PREFERRED = (process.env.GEMINI_MODEL || process.env.GEMINI_PREFERRED_MODEL || '').trim();
 
 const RESUME_CSS = `
   <style>
@@ -389,6 +391,11 @@ async function callGeminiFlash(promptText, opts = {}) {
       'models/gemini-1.0-pro'
     ];
 
+    // Put preferred model first if provided
+    const preferredFromEnv = GEMINI_MODEL_PREFERRED
+      ? (GEMINI_MODEL_PREFERRED.startsWith('models/') ? GEMINI_MODEL_PREFERRED : `models/${GEMINI_MODEL_PREFERRED}`)
+      : '';
+
     if (Array.isArray(globalThis.__GEMINI_TEXT_MODELS__) && globalThis.__GEMINI_TEXT_MODELS__.length) {
       return globalThis.__GEMINI_TEXT_MODELS__;
     }
@@ -397,14 +404,20 @@ async function callGeminiFlash(promptText, opts = {}) {
     const models = (j && Array.isArray(j.models)) ? j.models : [];
     const names = models.map(m => m && m.name).filter(Boolean);
     if (!names.length) {
-      globalThis.__GEMINI_TEXT_MODELS__ = fallback;
-      return fallback;
+      const picked = preferredFromEnv ? [preferredFromEnv, ...fallback] : fallback;
+      globalThis.__GEMINI_TEXT_MODELS__ = picked;
+      return picked;
     }
 
     // Exclude image/vision models
     const textOnly = names.filter(n => n.includes('gemini') && !n.includes('image') && !n.includes('vision'));
     const preferred = textOnly.filter(n => n.includes('flash') || n.includes('pro'));
-    const picked = preferred.length ? preferred : (textOnly.length ? textOnly : fallback);
+    let picked = preferred.length ? preferred : (textOnly.length ? textOnly : fallback);
+    if (preferredFromEnv) {
+      // Ensure preferred model is tried first
+      picked = [preferredFromEnv, ...picked.filter(n => n !== preferredFromEnv)];
+    }
+
     globalThis.__GEMINI_TEXT_MODELS__ = picked;
     return picked;
   }
@@ -823,12 +836,12 @@ OUTPUT: JSON only. No markdown.
             debug
           });
         }
-        
-        // try AI with retries for short JD to encourage variability
-        const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
-        let aiData = null;
-        let lastError = null;
-        for (const t of temps) {
+
+         // try AI with retries for short JD to encourage variability
+         const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
+         let aiData = null;
+         let lastError = null;
+         for (const t of temps) {
             try {
                 const seed = requestSeed.toString(36);
                 const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
@@ -838,22 +851,26 @@ OUTPUT: JSON only. No markdown.
             } catch (e) {
                 lastError = e;
                 debug.attempts.push({ temp: t, parsed: false, error: e.message });
+
+                // If Gemini is rate-limiting, don't spin; fall back immediately
+                const msg = String(e && e.message ? e.message : '');
+                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) break;
             }
-        }
+         }
 
-        try {
-            if (!aiData) throw lastError || new Error('No AI data returned');
+         try {
+             if (!aiData) throw lastError || new Error('No AI data returned');
 
-            Object.keys(aiPrompts).forEach(pid => {
-                let val = aiData[pid];
-                const type = aiTypes[pid];
-                const label = aiLabels[pid] || '';
-                if (!val || typeof val !== 'string' || val.trim().length < 2) {
-                    const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
-                    debug.usedFallbackFor.push(pid);
-                    return;
-                }
+             Object.keys(aiPrompts).forEach(pid => {
+                 let val = aiData[pid];
+                 const type = aiTypes[pid];
+                 const label = aiLabels[pid] || '';
+                 if (!val || typeof val !== 'string' || val.trim().length < 2) {
+                     const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
+                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+                     debug.usedFallbackFor.push(pid);
+                     return;
+                 }
 
                 // SKILLS: augment instead of replacing completely
                 if (type === 'chips' && label === 'Technical Skills') {
@@ -947,24 +964,27 @@ OUTPUT: JSON only. No markdown.
                 // final fallback
                 htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
             });
-        } catch (e) {
-            console.error('AI processing failed:', e);
-            if (aiOnly) {
-              const msg = String(e.message || 'AI failed');
-              if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
-              }
-              return res.status(503).json({ ok: false, error: msg, debug });
-            }
-            Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
-        }
-    } else {
-         if (aiOnly) {
-           const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
-           return res.status(503).json({ ok: false, error: reason, debug });
+         } catch (e) {
+             console.error('AI processing failed:', e);
+             if (aiOnly) {
+               const msg = String(e.message || 'AI failed');
+               if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+                 return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
+               }
+               return res.status(503).json({ ok: false, error: msg, debug });
+             }
+             Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
+             // Ensure fallback still looks dynamic per request
+             htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
          }
-         Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
-    }
+     } else {
+          if (aiOnly) {
+            const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
+            return res.status(503).json({ ok: false, error: reason, debug });
+          }
+          Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
+          htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
+     }
 
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
@@ -1101,4 +1121,37 @@ function seededBumpMetric(text, rand) {
     const nn = Math.max(5, Math.min(95, n + delta));
     return `${tilde || ''}${nn}%`;
   });
+}
+
+// Ensure Summary/Projects/Achievements/Certifications are still dynamic even when AI quota hits 429 by applying the same seeded post-processing to fallback HTML, and avoid consuming daily quota on repeated 429s.
+function applyGuaranteedVariationToFallback(html, rolePreset, rand) {
+  let out = String(html || '');
+
+  // Summary: tweak wording + metric
+  out = out.replace(/<div class="resume-section-title">Summary<\/div>\s*<div class="resume-item"[^>]*>\s*<p>([\s\S]*?)<\/p>/i,
+    (m, p1) => m.replace(p1, escapeHtml(seededBumpMetric(seededSynonymSwap(String(p1), rand), rand))));
+
+  // Certifications/Achievements/Projects lists: rotate list items when present
+  const rotateLis = (block) => {
+    const items = String(block).match(/<li>[\s\S]*?<\/li>/g) || [];
+    if (items.length < 2) return block;
+    const rotated = rotateBySeed(items, rand);
+    return block.replace(items.join(''), rotated.join(''));
+  };
+
+  out = out.replace(/<div class="resume-section-title">Certifications<\/div>[\s\S]*?<ul[^>]*>([\s\S]*?)<\/ul>/i,
+    (m) => rotateLis(m));
+
+  out = out.replace(/<div class="resume-section-title">Achievements<\/div>[\s\S]*?<ul[^>]*>([\s\S]*?)<\/ul>/i,
+    (m) => {
+      // also tweak metrics/wording inside each li
+      return rotateLis(m).replace(/<li>([\s\S]*?)<\/li>/g, (mm, t) => `<li>${seededBumpMetric(seededSynonymSwap(t, rand), rand)}</li>`);
+    });
+
+  out = out.replace(/<div class="resume-section-title">Projects<\/div>[\s\S]*?<ul[^>]*>([\s\S]*?)<\/ul>/i,
+    (m) => {
+      return rotateLis(m).replace(/<li>([\s\S]*?)<\/li>/g, (mm, t) => `<li>${seededBumpMetric(seededSynonymSwap(t, rand), rand)}</li>`);
+    });
+
+  return out;
 }
