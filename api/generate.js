@@ -1047,9 +1047,9 @@ OUTPUT: JSON only. No markdown.
              if (aiOnly) {
                const msg = String(e.message || 'AI failed');
                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                 const retryMs = parseRetryDelayMs(msg);
-                 if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
-                 refundDailyTicket();
+                  const retryMs = parseRetryDelayMs(msg);
+                  if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+                  refundDailyTicket();
                   return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
                }
                return res.status(503).json({ ok: false, error: msg, debug });
@@ -1081,6 +1081,21 @@ OUTPUT: JSON only. No markdown.
       debug.fallbackNote = 'AI returned an unusable value for one or more sections (missing/empty/etc.). The server used robust fallbacks for those sections to avoid failing the whole resume.';
     }
     
+    // Save to history only if we have a meaningful title (prevents blank "name:" items)
+    try {
+      const historyTitle = buildHistoryTitle({ nickname, profile, jd: jdNormalized, finalJD });
+      if (historyTitle) {
+        await saveHistory({
+          nickname: nickname || profile?.fullName || 'anonymous',
+          title: historyTitle,
+          jd: jdNormalized,
+          finalJD,
+          html: htmlSkeleton,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    } catch (_) {}
+
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
   } catch (err) {
@@ -1088,237 +1103,20 @@ OUTPUT: JSON only. No markdown.
   }
 };
 
-// Replace unseeded implementations with seeded ones (keep old names used throughout)
-function shuffle(arr) { return shuffleSeeded(arr, () => Math.random()); }
+// Build a stable "Recent Generations" title and avoid blanks
+function buildHistoryTitle({ nickname, profile, jd, finalJD }) {
+  const name = String(nickname || profile?.fullName || '').trim();
+  const j = String(jd || '').trim();
+  const fj = String(finalJD || '').trim();
 
-// Update dynamic helpers to accept optional rand
-function dynamicSummary(rolePreset, finalJD, rand = Math.random) {
-  const pct = randomPercentSeeded(rand, 15, 40);
-  const core = shuffleSeeded((rolePreset.skills || []).slice(), rand).slice(0, 3);
-  const a = `Entry-level ${finalJD.split(' with ')[0] || 'professional'} with hands-on project experience in ${core.join(', ')}.`;
-  const b = `Built academic projects focused on data quality, automation, and performance optimization, achieving ~${pct}% improvements in key metrics.`;
-  const c = `Strong fundamentals in problem-solving and collaboration, eager to contribute to production-grade systems and learn quickly.`;
-  return `${a} ${b} ${c}`;
-}
+  // Prefer normalized JD, fallback to expanded JD, else empty
+  const role = j || (fj.split(' with ')[0] || '').trim();
+  const title = role ? (role.length > 60 ? role.slice(0, 60) + '…' : role) : '';
 
-function dynamicCerts(rolePreset, rand = Math.random) {
-   const pool = (rolePreset.certs && rolePreset.certs.length) ? rolePreset.certs.slice() : ['AWS Certified Cloud Practitioner','PCEP – Certified Entry-Level Python Programmer'];
-   return shuffleSeeded(pool, rand).slice(0,2);
-}
+  // If we still don't have a role/title, don't save history
+  if (!title) return '';
 
-function dynamicAchievements(rolePreset, rand = Math.random) {
-   const pool = (rolePreset.achievements && rolePreset.achievements.length) ? rolePreset.achievements.slice() : [];
-   const chosen = shuffleSeeded(pool, rand).slice(0,2);
-   return augmentAchievements(chosen.length ? chosen : ['Improved system performance', 'Automated a recurring workflow'], rolePreset);
-}
-
-function dynamicProjects(rolePreset, rand = Math.random) {
-   const pool = (rolePreset.projects && rolePreset.projects.length) ? rolePreset.projects.slice() : [];
-   const chosen = shuffleSeeded(pool, rand).slice(0,2);
-   return chosen.map(p => augmentProjectIfNeeded(p, rolePreset));
-}
-
-function dynamicTraits(finalJD, rand = Math.random) {
-   const base = extractKeywordsFromJD(finalJD, 'soft');
-   const extras = ['Ownership','Attention to Detail','Curiosity','Stakeholder Communication','Time Management','Learning Agility'];
-   return shuffleSeeded([...new Set(base.concat(extras))], rand).slice(0, 6);
-}
-
-function dynamicExperienceBullet(role, rolePreset, rand = Math.random) {
-   const actions = ['Collaborated on', 'Developed', 'Optimized', 'Managed', 'Assisted with', 'Implemented'];
-   const techs = shuffleSeeded((rolePreset.skills || []).slice(), rand).slice(0, 2);
-   const outcomes = ['improving workflow efficiency by ~15%', 'reducing processing latency', 'enhancing system reliability', 'supporting data-driven decision making', 'streamlining internal processes'];
-   return `${randomFromSeeded(actions, rand)} ${role} components using ${techs.join(' and ')}, ${randomFromSeeded(outcomes, rand)}.`;
-}
-
-function randomFrom(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function randomPercent(min = 10, max = 40) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function uniqCaseInsensitive(arr) {
-  const seen = new Set();
-  const out = [];
-  for (const x of arr) {
-    const k = String(x || '').trim();
-    if (!k) continue;
-    const key = k.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(k);
-  }
-  return out;
-}
-
-function enforceTwoDistinct(items, fallbackPool = []) {
-  const uniq = uniqCaseInsensitive(items);
-  const pool = uniqCaseInsensitive(fallbackPool);
-  while (uniq.length < 2 && pool.length) {
-    const cand = pool.shift();
-    if (!uniq.some(x => x.toLowerCase() === cand.toLowerCase())) uniq.push(cand);
-  }
-  return uniq.slice(0, 2);
-}
-
-function enforceNDistinct(items, n, fallbackPool = []) {
-  const uniq = uniqCaseInsensitive(items);
-  const pool = uniqCaseInsensitive(fallbackPool);
-  while (uniq.length < n && pool.length) {
-    const cand = pool.shift();
-    if (!uniq.some(x => x.toLowerCase() === cand.toLowerCase())) uniq.push(cand);
-  }
-  return uniq.slice(0, n);
-}
-
-function seededPermuteString(s, rand) {
-  const parts = String(s || '').split(' ');
-  return shuffleSeeded(parts, rand).join(' ');
-}
-
-function rotateBySeed(arr, rand) {
-  if (!Array.isArray(arr) || arr.length < 2) return arr;
-  const k = Math.floor(rand() * arr.length);
-  return arr.slice(k).concat(arr.slice(0, k));
-}
-
-function seededSynonymSwap(text, rand) {
-  let s = String(text || '');
-  const swaps = [
-    ['Highly motivated', 'Driven'],
-    ['Aspiring', 'Entry-level'],
-    ['strong', 'solid'],
-    ['proven', 'demonstrated'],
-    ['eager', 'keen'],
-    ['leverage', 'apply'],
-    ['utilized', 'used'],
-    ['developed', 'built'],
-    ['optimized', 'improved'],
-  ];
-  // Apply a few swaps deterministically
-  const count = 2 + Math.floor(rand() * 2);
-  const picked = rotateBySeed(swaps, rand).slice(0, count);
-  for (const [from, to] of picked) {
-    const re = new RegExp(`\\b${from}\\b`, 'i');
-    if (re.test(s) && rand() > 0.3) s = s.replace(re, to);
-  }
-  return s;
-}
-
-function seededBumpMetric(text, rand) {
-  // Nudge percentages slightly so repeated gens don't look identical
-  return String(text || '').replace(/(~?)(\d{1,2})(%)?/g, (m, tilde, num, pct) => {
-    const n = Number(num);
-    if (!pct || Number.isNaN(n) || n < 5 || n > 95) return m;
-    const delta = (rand() > 0.5 ? 1 : -1) * (1 + Math.floor(rand() * 3));
-    const nn = Math.max(5, Math.min(95, n + delta));
-    return `${tilde || ''}${nn}%`;
-  });
-}
-
-// Ensure Summary/Projects/Achievements/Certifications are still dynamic even when AI quota hits 429 by applying the same seeded post-processing to fallback HTML, and avoid consuming daily quota on repeated 429s.
-function applyGuaranteedVariationToFallback(html, rolePreset, rand) {
-  let out = String(html || '');
-
-  // Summary: tweak wording + metric
-  out = out.replace(/<div class="resume-section-title">Summary<\/div>\s*<div class="resume-item"[^>]*>\s*<p>([\s\S]*?)<\/p>/i,
-    (m, p1) => m.replace(p1, escapeHtml(seededBumpMetric(seededSynonymSwap(String(p1), rand), rand))));
-
-  // Certifications/Achievements/Projects lists: rotate list items when present
-  const rotateLis = (block) => {
-    const items = String(block).match(/<li>[\s\S]*?<\/li>/g) || [];
-    if (items.length < 2) return block;
-    const rotated = rotateBySeed(items, rand);
-    return block.replace(items.join(''), rotated.join(''));
-  };
-
-  out = out.replace(/<div class="resume-section-title">Certifications<\/div>[\s\S]*?<ul[^>]*>([\s\S]*?)<\/ul>/i,
-    (m) => rotateLis(m));
-
-  out = out.replace(/<div class="resume-section-title">Achievements<\/div>[\s\S]*?<ul[^>]*>([\s\S]*?)<\/ul>/i,
-    (m) => {
-      // also tweak metrics/wording inside each li
-      return rotateLis(m).replace(/<li>([\s\S]*?)<\/li>/g, (mm, t) => `<li>${seededBumpMetric(seededSynonymSwap(t, rand), rand)}</li>`);
-    });
-
-  out = out.replace(/<div class="resume-section-title">Projects<\/div>[\s\S]*?<ul[^>]*>([\s\S]*?)<\/ul>/i,
-    (m) => {
-      return rotateLis(m).replace(/<li>([\s\S]*?)<\/li>/g, (mm, t) => `<li>${seededBumpMetric(seededSynonymSwap(t, rand), rand)}</li>`);
-    });
-
-  return out;
-}
-
-// Helper: parse AI projects into exactly 2 safe <li> strings
-function parseProjectsToLis(val, rolePreset, rand) {
-  const raw = String(val || '').trim();
-  // Split by pipe first (expected format)
-  let parts = raw.split('|').map(s => s.trim()).filter(Boolean);
-
-  // If AI didn't use pipes, try to split by list/newlines
-  if (parts.length < 2) {
-    parts = raw
-      .split(/\n+/)
-      .map(s => s.trim())
-      .filter(Boolean)
-      .filter(s => s.length > 8);
-  }
-
-  // Last resort: split by sentence boundary into chunks
-  if (parts.length < 2) {
-    parts = raw
-      .split(/(?<=[.!?])\s+/)
-      .map(s => s.trim())
-      .filter(Boolean)
-      .filter(s => s.length > 40);
-  }
-
-  parts = uniqCaseInsensitive(parts);
-
-  // Ensure 2 items using preset fallbacks
-  const preset = Array.isArray(rolePreset.projects) ? rolePreset.projects : [];
-  const presetParts = preset.length
-    ? preset.flatMap(p => String(p).split('|').map(x => x.trim()).filter(Boolean))
-    : [];
-
-  parts = enforceNDistinct(parts, 2, presetParts);
-  parts = parts.slice(0, 2);
-
-  // Make output safe and consistent:
-  // - allow basic <b> tags if present, but escape everything else to avoid broken HTML
-  const safeOne = (p) => {
-    let s = String(p || '').trim();
-
-    // Normalize metrics/wording for visible variation
-    s = seededBumpMetric(seededSynonymSwap(s, rand), rand);
-
-    // Keep <b>...</b> if AI used it; otherwise treat as plain text
-    const hasBold = /<\s*b\s*>[\s\S]*?<\s*\/\s*b\s*>/i.test(s);
-    if (!hasBold) {
-      s = escapeHtml(s);
-      if (!isLikelyTechnical(s)) s = escapeHtml(augmentProjectIfNeeded(String(p || ''), rolePreset, rand));
-      return `<li>${s}</li>`;
-    }
-
-    // If bold exists, escape everything then re-inject bold tags by a simple whitelist
-    // 1) temporary markers
-    const token = '__BOLD__TOKEN__';
-    s = s.replace(/<\s*b\s*>/gi, `${token}OPEN${token}`).replace(/<\s*\/\s*b\s*>/gi, `${token}CLOSE${token}`);
-    s = escapeHtml(s);
-    s = s
-      .replaceAll(`${token}OPEN${token}`, '<b>')
-      .replaceAll(`${token}CLOSE${token}`, '</b>');
-
-    // Ensure augmentation if still not technical
-    if (!isLikelyTechnical(s)) {
-      const aug = escapeHtml(augmentProjectIfNeeded(String(p || ''), rolePreset, rand));
-      return `<li>${aug}</li>`;
-    }
-
-    return `<li>${s}</li>`;
-  };
-
-  return parts.map(safeOne).join('');
+  // Store a consistent "name: role" style title (UI can render as it likes)
+  if (name) return `${name}: ${title}`;
+  return title;
 }
