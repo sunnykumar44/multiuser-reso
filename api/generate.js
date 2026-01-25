@@ -93,18 +93,17 @@ function extractKeywordsFromJD(jd, type = 'all') {
 }
 
 // --- HELPER 2: DYNAMIC FALLBACK GENERATOR (100% JD-DERIVED) ---
-function getSmartFallback(section, jd) {
+function getSmartFallback(section, jd, rand = Math.random) {
   const rolePreset = getRolePreset(jd);
-  // Skills: keyword-derived + shuffled preset padding
   if (section === 'skills') {
     let skills = extractKeywordsFromJD(jd, 'technical').slice(0, 6);
-    const pool = shuffle((rolePreset.skills || []).slice());
+    const pool = shuffleSeeded((rolePreset.skills || []).slice(), rand);
     for (const p of pool) { if (skills.length >= 12) break; if (!skills.includes(p)) skills.push(p); }
     return skills;
   }
-  if (section === 'certifications') return dynamicCerts(rolePreset).join(' | ');
-  if (section === 'projects') return dynamicProjects(rolePreset).join(' | ');
-  if (section === 'achievements') return dynamicAchievements(rolePreset).join(' | ');
+  if (section === 'certifications') return dynamicCerts(rolePreset, rand).join(' | ');
+  if (section === 'projects') return dynamicProjects(rolePreset, rand).join(' | ');
+  if (section === 'achievements') return dynamicAchievements(rolePreset, rand).join(' | ');
   return "";
 }
 
@@ -287,11 +286,11 @@ function randomFromSeeded(arr, rand) { return arr[Math.floor(rand() * arr.length
 function randomPercentSeeded(rand, min = 10, max = 40) { return Math.floor(rand() * (max - min + 1)) + min; }
 
 // Augment project text by inserting a role-relevant tech and a small measurable result
-function augmentProjectIfNeeded(text, rolePreset) {
+function augmentProjectIfNeeded(text, rolePreset, rand = Math.random) {
   // if text already mentions techs, return
   if (isLikelyTechnical(text)) return text;
-  const tech = randomFrom(rolePreset.skills || ['Python']);
-  const pct = randomPercent();
+  const tech = randomFromSeeded(rolePreset.skills || ['Python'], rand);
+  const pct = randomPercentSeeded(rand, 10, 40);
   return `${text.trim()} Built using ${tech}. Achieved ~${pct}% improvement in relevant metric.`;
 }
 
@@ -452,7 +451,7 @@ module.exports = async (req, res) => {
             aiPrompts[pid] = `INTELLIGENT SKILL INFERENCE: Based on role "${finalJD.slice(0, 100)}", infer 10-15 TECHNICAL skills that are: (1) Standard for this role (2) Include programming languages, frameworks, databases, tools (3) NOT copied verbatim from JD (4) Realistic for entry-level. User has: ${userSkills.join(',')}. Include them if relevant. Return comma-separated. Minimum 8 technical skills.`;
             
             // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 8
-            const dynamicSkills = getSmartFallback('skills', finalJD);
+            const dynamicSkills = getSmartFallback('skills', finalJD, rand);
             const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
             let combined = [...new Set([...relevantUserSkills, ...dynamicSkills])];
             
@@ -515,7 +514,7 @@ module.exports = async (req, res) => {
                   aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${finalJD.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used. Format: "<b>Project Name:</b> Built using [Tech Stack] to solve [Problem]. Achieved [Result]. | <b>Project 2:</b> Description". Entry-level appropriate.`;
                   aiLabels[pid] = 'Projects';
              }             // Dynamic Fallback
-             aiFallbacks[pid] = getSmartFallback('projects', finalJD).split('|').map(p => `<li>${p.trim()}</li>`).join('');
+             aiFallbacks[pid] = getSmartFallback('projects', finalJD, rand).split('|').map(p => `<li>${p.trim()}</li>`).join('');
              aiTypes[pid] = 'list';
         }
         else if (label === 'Education') {
@@ -531,7 +530,7 @@ module.exports = async (req, res) => {
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
             aiPrompts[pid] = `INTELLIGENT CERTIFICATION GENERATION for "${finalJD.slice(0, 100)}" role. Generate 2 REAL, FULL certification names that: (1) Match the technical skills (2) Are industry-standard (3) Appropriate for entry-level. Examples: "AWS Certified Cloud Practitioner", "Oracle Certified Associate, Java SE 11 Developer", "Microsoft Certified: Azure Fundamentals", "PCEP – Certified Entry-Level Python Programmer". Format: "Full Cert Name | Full Cert Name". NO generic names.`;
-            aiFallbacks[pid] = getSmartFallback('certifications', finalJD).split('|').map(c => `<li>${c.trim()}</li>`).join('');
+            aiFallbacks[pid] = getSmartFallback('certifications', finalJD, rand).split('|').map(c => `<li>${c.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
             aiLabels[pid] = 'Certifications';
         }
@@ -540,7 +539,7 @@ module.exports = async (req, res) => {
             const pid = `sec_${sectionCounter++}`;
             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
             aiPrompts[pid] = `INTELLIGENT ACHIEVEMENT GENERATION for "${finalJD.slice(0, 100)}" role. Create 2 SPECIFIC, MEASURABLE achievements that: (1) Use technical skills (2) Show quantifiable results (3) Are realistic for freshers. Examples: "Reduced API response time by 35% through caching optimization", "Automated data processing pipeline saving 20 hours/week", "Improved code test coverage from 60% to 85%". Format: "Achievement 1 | Achievement 2". NO generic statements.`;
-            aiFallbacks[pid] = getSmartFallback('achievements', finalJD).split('|').map(a => `<li>${a.trim()}</li>`).join('');
+            aiFallbacks[pid] = getSmartFallback('achievements', finalJD, rand).split('|').map(a => `<li>${a.trim()}</li>`).join('');
             aiTypes[pid] = 'list';
             aiLabels[pid] = 'Achievements';
         }
