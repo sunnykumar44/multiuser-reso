@@ -297,6 +297,12 @@ function normalizeSkillToken(s) {
   if (/^aws\s*s3$/.test(t)) return 'AWS S3';
   if (/^bigquery$/.test(t)) return 'BigQuery';
   if (/^power\s*bi$/.test(t)) return 'PowerBI';
+  if (/^java$/.test(t)) return 'Java';
+  if (/^python$/.test(t)) return 'Python';
+  if (/^numpy$/.test(t)) return 'NumPy';
+  if (/^pandas$/.test(t)) return 'Pandas';
+  if (/^git$/.test(t)) return 'Git';
+  if (/^docker$/.test(t)) return 'Docker';
 
   // Title-case fallback
   return raw.length <= 4 ? raw.toUpperCase() : raw;
@@ -533,6 +539,13 @@ function normalizeJD(jdRaw = '') {
 
   // Common misspellings / variants for roles & skills
   const map = [
+    // Very common typos
+    [/\bdevloper\b/gi, 'developer'],
+    [/\bjav\b/gi, 'java'],
+    [/\bjav\s+developer\b/gi, 'java developer'],
+    [/\bjava\s+devloper\b/gi, 'java developer'],
+    [/\bjav\s+devloper\b/gi, 'java developer'],
+
     [/\bdata\s*analy(st|ts)\b/gi, 'data analyst'],
     [/\bdata\s*analys(t|ts)\b/gi, 'data analyst'],
     [/\bdata\s*analyst\b/gi, 'data analyst'],
@@ -1001,22 +1014,9 @@ OUTPUT: JSON only. No markdown.
 
                 // PROJECTS
                 if (type === 'list' && label === 'Projects') {
-                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    parts = uniqCaseInsensitive(parts);
-                    // Fill from role preset if AI returned < 2
-                    const preset = Array.isArray(rolePreset.projects) ? rolePreset.projects : [];
-                    const presetParts = preset.length
-                      ? preset.flatMap(p => String(p).split('|').map(x => x.trim()).filter(Boolean))
-                      : [];
-                    parts = enforceNDistinct(parts, 2, presetParts);
-                    // Always exactly 2
-                    parts = parts.slice(0, 2);
-                    // Guaranteed visible variation: rotate order + tweak wording/metrics
-                    parts = rotateBySeed(parts, rand).map(p => seededBumpMetric(seededSynonymSwap(p, rand), rand));
-                    parts = parts.map(p => { if (isLikelyTechnical(p)) return p; return augmentProjectIfNeeded(p, rolePreset); });
-                    const lis = parts.map(b => `<li>${b}</li>`).join('');
+                    const lis = parseProjectsToLis(val, rolePreset, rand);
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    return;
+                     return;
                 }
 
                 // final fallback
@@ -1219,4 +1219,76 @@ function applyGuaranteedVariationToFallback(html, rolePreset, rand) {
     });
 
   return out;
+}
+
+// Helper: parse AI projects into exactly 2 safe <li> strings
+function parseProjectsToLis(val, rolePreset, rand) {
+  const raw = String(val || '').trim();
+  // Split by pipe first (expected format)
+  let parts = raw.split('|').map(s => s.trim()).filter(Boolean);
+
+  // If AI didn't use pipes, try to split by list/newlines
+  if (parts.length < 2) {
+    parts = raw
+      .split(/\n+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(s => s.length > 8);
+  }
+
+  // Last resort: split by sentence boundary into chunks
+  if (parts.length < 2) {
+    parts = raw
+      .split(/(?<=[.!?])\s+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(s => s.length > 40);
+  }
+
+  parts = uniqCaseInsensitive(parts);
+
+  // Ensure 2 items using preset fallbacks
+  const preset = Array.isArray(rolePreset.projects) ? rolePreset.projects : [];
+  const presetParts = preset.length
+    ? preset.flatMap(p => String(p).split('|').map(x => x.trim()).filter(Boolean))
+    : [];
+
+  parts = enforceNDistinct(parts, 2, presetParts);
+  parts = parts.slice(0, 2);
+
+  // Make output safe and consistent:
+  // - allow basic <b> tags if present, but escape everything else to avoid broken HTML
+  const safeOne = (p) => {
+    let s = String(p || '').trim();
+
+    // Normalize metrics/wording for visible variation
+    s = seededBumpMetric(seededSynonymSwap(s, rand), rand);
+
+    // Keep <b>...</b> if AI used it; otherwise treat as plain text
+    const hasBold = /<\s*b\s*>[\s\S]*?<\s*\/\s*b\s*>/i.test(s);
+    if (!hasBold) {
+      s = escapeHtml(s);
+      if (!isLikelyTechnical(s)) s = escapeHtml(augmentProjectIfNeeded(String(p || ''), rolePreset, rand));
+      return `<li>${s}</li>`;
+    }
+
+    // If bold exists, escape everything then re-inject bold tags by a simple whitelist
+    // 1) temporary markers
+    const token = '__BOLD__TOKEN__';
+    s = s.replace(/<\s*b\s*>/gi, `${token}OPEN${token}`).replace(/<\s*\/\s*b\s*>/gi, `${token}CLOSE${token}`);
+    s = escapeHtml(s);
+    s = s
+      .replaceAll(`${token}OPEN${token}`, '<b>')
+      .replaceAll(`${token}CLOSE${token}`, '</b>');
+
+    // Ensure augmentation if still not technical
+    if (!isLikelyTechnical(s)) {
+      const aug = escapeHtml(augmentProjectIfNeeded(String(p || ''), rolePreset, rand));
+      return `<li>${aug}</li>`;
+    }
+
+    return `<li>${s}</li>`;
+  };
+
+  return parts.map(safeOne).join('');
 }
