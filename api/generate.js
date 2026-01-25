@@ -285,8 +285,9 @@ const RESUME_CSS = `
     .resume-role { font-weight: bold; color: #000; }
     .resume-date { font-weight: bold; font-size: 10px; color: #000; }
     .resume-company { font-style: italic; color: #444; margin-bottom: 2px; display: block; }
-    .generated-resume ul { margin-left: 18px; margin-top: 4px; padding: 0; }
-    .generated-resume li { margin-bottom: 4px; font-size: 11px; }
+    /* Lists should read like clean new lines (no bullet dots) */
+    .generated-resume ul { margin: 4px 0 0; padding: 0; list-style: none; }
+    .generated-resume li { margin: 0 0 4px 0; font-size: 11px; }
     .generated-resume p { margin-bottom: 4px; font-size: 11px; text-align: justify; }
     
     .skill-tag {
@@ -628,7 +629,7 @@ function normalizeJD(jdRaw = '') {
     [/\bdevloper\b/gi, 'developer'],
     [/\bjav\b/gi, 'java'],
     [/\bjav\s+developer\b/gi, 'java developer'],
-    [/\bjava\s+devloper\b/gi, 'java developer'],
+    [/\bjava\s*devloper\b/gi, 'java developer'],
     [/\bjav\s+devloper\b/gi, 'java developer'],
 
     [/\bdata\s*analy(st|ts)\b/gi, 'data analyst'],
@@ -1168,7 +1169,7 @@ OUTPUT: JSON only. No markdown.
     
     // Save to history only if we have a meaningful title (prevents blank "name:" items)
     try {
-      const historyTitle = buildHistoryTitle({ nickname, profile, jd: jdNormalized, finalJD });
+      const historyTitle = buildHistoryTitle({ nickname, profile, jd, finalJD });
       if (historyTitle) {
         await saveHistory({
           nickname: nickname || profile?.fullName || 'anonymous',

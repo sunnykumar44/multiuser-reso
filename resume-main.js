@@ -91,3 +91,64 @@ function wireDownloadPdfButtonToPrintOnly() {
 // Try wiring now and after DOM is ready
 wireDownloadPdfButtonToPrintOnly();
 document.addEventListener('DOMContentLoaded', wireDownloadPdfButtonToPrintOnly);
+
+// ===== Recent Generations: prevent duplicates/blank titles =====
+function normalizeHistoryTitle(t) {
+  return String(t || '').replace(/\s+/g, ' ').trim();
+}
+
+function isBlankHistoryTitle(t) {
+  const s = normalizeHistoryTitle(t);
+  // blocks "sunnyz:" and other empty name-only titles
+  if (!s) return true;
+  if (/^[^:]{1,40}:\s*$/.test(s)) return true;
+  return false;
+}
+
+function dedupeHistoryItems(items) {
+  const out = [];
+  const seen = new Set();
+  for (const it of (items || [])) {
+    const title = normalizeHistoryTitle(it?.title);
+    if (isBlankHistoryTitle(title)) continue;
+    const created = it?.createdAt ? String(it.createdAt) : '';
+    const key = `${title.toLowerCase()}|${created}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(Object.assign({}, it, { title }));
+  }
+  return out;
+}
+
+// Patch common history save/render hooks if present
+try {
+  const _origSave = window.saveToHistory;
+  if (typeof _origSave === 'function') {
+    window.saveToHistory = function patchedSaveToHistory(item) {
+      if (isBlankHistoryTitle(item?.title)) return;
+      return _origSave.call(this, item);
+    };
+  }
+} catch (_) {}
+
+try {
+  const _origRender = window.renderHistory;
+  if (typeof _origRender === 'function') {
+    window.renderHistory = function patchedRenderHistory(list) {
+      return _origRender.call(this, dedupeHistoryItems(list));
+    };
+  }
+} catch (_) {}
+
+// If history is stored in localStorage, de-dupe on load once
+try {
+  const keys = ['resume_history', 'history', 'recent_generations'];
+  for (const k of keys) {
+    const raw = localStorage.getItem(k);
+    if (!raw) continue;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) continue;
+    const cleaned = dedupeHistoryItems(arr);
+    if (cleaned.length !== arr.length) localStorage.setItem(k, JSON.stringify(cleaned));
+  }
+} catch (_) {}
