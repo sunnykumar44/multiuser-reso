@@ -205,6 +205,40 @@ function dynamicTraits(finalJD, rand = Math.random) {
   return shuffleSeeded(merged, rand).slice(0, 6);
 }
 
+// Ensure fallback HTML still gets lightweight variation and never throws
+function seededSynonymSwap(text, rand = Math.random) {
+  const s = String(text || '');
+  const swaps = [
+    [/(improved|improving)/gi, () => (rand() > 0.5 ? 'enhanced' : 'improved')],
+    [/(reduced|reducing)/gi, () => (rand() > 0.5 ? 'lowered' : 'reduced')],
+    [/(built)/gi, () => (rand() > 0.5 ? 'developed' : 'built')],
+    [/(created)/gi, () => (rand() > 0.5 ? 'implemented' : 'created')],
+  ];
+  let out = s;
+  for (const [re, rep] of swaps) out = out.replace(re, rep);
+  return out;
+}
+
+function seededBumpMetric(text, rand = Math.random) {
+  const s = String(text || '');
+  // If it already contains a %, keep it
+  if (/%/.test(s)) return s;
+  // Add a small metric sometimes
+  if (rand() < 0.35) return `${s} (~${randomPercent(rand, 10, 35)}% impact).`;
+  return s;
+}
+
+function applyGuaranteedVariationToFallback(html, rolePreset, rand = Math.random) {
+  try {
+    let out = String(html || '');
+    out = seededSynonymSwap(out, rand);
+    out = seededBumpMetric(out, rand);
+    return out;
+  } catch (_) {
+    return String(html || '');
+  }
+}
+
 function escapeHtml(s = "") {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
