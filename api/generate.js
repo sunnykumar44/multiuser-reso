@@ -411,21 +411,34 @@ async function callGeminiFlash(promptText, opts = {}) {
 
   const candidatesModels = await pickModels();
 
-  const body = {
-    contents: [{ parts: [{ text: promptText }] }],
-    generationConfig: {
-      temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.9,
-      topP: typeof opts.topP === 'number' ? opts.topP : 0.95,
-      presencePenalty: typeof opts.presencePenalty === 'number' ? opts.presencePenalty : 0.6,
-      frequencyPenalty: typeof opts.frequencyPenalty === 'number' ? opts.frequencyPenalty : 0.4,
-      maxOutputTokens: opts.maxOutputTokens || 2600,
+  const temperature = (typeof opts.temperature === 'number') ? opts.temperature : 0.9;
+  const topP = (typeof opts.topP === 'number') ? opts.topP : 0.95;
+  const maxOutputTokens = opts.maxOutputTokens || 2600;
+
+  function buildBody(withPenalty) {
+    const gen = {
+      temperature,
+      topP,
+      maxOutputTokens,
       responseMimeType: "application/json"
+    };
+
+    if (withPenalty) {
+      gen.presencePenalty = (typeof opts.presencePenalty === 'number') ? opts.presencePenalty : 0.6;
+      gen.frequencyPenalty = (typeof opts.frequencyPenalty === 'number') ? opts.frequencyPenalty : 0.4;
     }
-  };
+
+    return {
+      contents: [{ parts: [{ text: promptText }] }],
+      generationConfig: gen
+    };
+  }
 
   let lastErr = null;
   for (const modelName of candidatesModels) {
     const url = `${base}/${modelName}:generateContent?${keyQs}`;
+    const body = buildBody(!opts.__noPenalty);
+
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -434,16 +447,21 @@ async function callGeminiFlash(promptText, opts = {}) {
 
     if (!resp.ok) {
       const txt = await resp.text().catch(() => '');
-      
+
+      // If this model doesn't support penalties, retry once without penalties
+      if (resp.status === 400 && /Penalty is not enabled for this model/i.test(txt) && !opts.__noPenalty) {
+        return callGeminiFlash(promptText, Object.assign({}, opts, { __noPenalty: true }));
+      }
+
       // Optional single retry on 429 (rate limit) honoring retryDelay
       if (resp.status === 429 && !opts.__retriedOnce) {
         const ms = parseRetryDelayMs(txt);
         if (ms > 0 && ms <= 30000) {
           await sleep(ms);
-          return callGeminiFlash(promptText, { ...opts, __retriedOnce: true });
+          return callGeminiFlash(promptText, Object.assign({}, opts, { __retriedOnce: true }));
         }
       }
-      
+
       lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
       continue;
     }
