@@ -208,6 +208,21 @@
     }
 
     @media print {
+      /* Hide all app UI by default */
+      body * { visibility: hidden !important; }
+
+      /* Show only resume */
+      .generated-resume, .generated-resume * { visibility: visible !important; }
+      .generated-resume { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; }
+
+      /* Extra defensive hides */
+      header, nav, footer, .navbar, .no-print, .actions, button { display: none !important; }
+
+      html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+      @page { margin: 12mm; }
+    }
+
+    @media print {
       body { background: white !important; }
       .top, .controls-card { display: none !important; }
       .container { padding: 0 !important; max-width: none !important; }
