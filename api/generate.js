@@ -351,8 +351,12 @@ async function callGeminiFlash(promptText, opts = {}) {
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
     generationConfig: {
-      temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.6, // allow override
-      maxOutputTokens: opts.maxOutputTokens || 2048,
+      temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.9,
+      topP: typeof opts.topP === 'number' ? opts.topP : 0.95,
+      // presencePenalty/frequencyPenalty are tolerated by some endpoints; safe to include
+      presencePenalty: typeof opts.presencePenalty === 'number' ? opts.presencePenalty : 0.6,
+      frequencyPenalty: typeof opts.frequencyPenalty === 'number' ? opts.frequencyPenalty : 0.4,
+      maxOutputTokens: opts.maxOutputTokens || 2600,
       responseMimeType: "application/json"
     }
   };
@@ -612,35 +616,43 @@ module.exports = async (req, res) => {
 
     // Build intelligentPrompt (required for AI path)
     const intelligentPrompt = `
-+You are an EXPERT RESUME INTELLIGENCE ENGINE.
-+
-+PRIMARY OBJECTIVE: Generate a complete, ATS-friendly resume where ALL sections are connected and role-aligned.
-+
-+JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1200)}"
-+USER PROFILE (may be partial): ${JSON.stringify(profile).slice(0, 1500)}
-+
-+RULES:
-+1) SUMMARY IS MANDATORY.
-+2) Infer role-appropriate technical skills; do not copy JD verbatim.
-+3) Skills must be used in Projects; Projects support Experience; Certs match Skills; Achievements come from Projects/Experience.
-+4) Return VALID JSON ONLY with these keys: ${Object.keys(aiPrompts).join(', ')}
-+
-+SECTION INSTRUCTIONS:
-+${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
-+
-+OUTPUT: JSON only. No markdown.
-+`;
+You are an EXPERT RESUME INTELLIGENCE ENGINE.
+
+PRIMARY OBJECTIVE: Generate a complete, ATS-friendly resume where ALL sections are connected and role-aligned.
+
+JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1200)}"
+USER PROFILE (may be partial): ${JSON.stringify(profile).slice(0, 1500)}
+
+STRICT VARIATION REQUIREMENTS:
+- Every generation MUST be meaningfully different in wording and examples.
+- Do NOT repeat the same certification twice.
+- Do NOT duplicate the same skill token.
+- Projects must be different from each other (different problem + dataset + technique).
+- Achievements must be different from each other and include measurable numbers.
+- Character Traits: return 6 distinct soft skills.
+
+RULES:
+1) SUMMARY IS MANDATORY.
+2) Infer role-appropriate technical skills; do not copy JD verbatim.
+3) Skills must be used in Projects; Projects support Experience; Certs match Skills; Achievements come from Projects/Experience.
+4) Return VALID JSON ONLY with these keys: ${Object.keys(aiPrompts).join(', ')}
+
+SECTION INSTRUCTIONS:
+${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
+
+OUTPUT: JSON only. No markdown.
+`;
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
         // try AI with retries for short JD to encourage variability
-        const temps = (finalJD && finalJD.trim().length < 50) ? [0.7, 0.85, 0.95] : [0.6, 0.75];
+        const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
         let aiData = null;
         let lastError = null;
         for (const t of temps) {
             try {
                 const seed = requestSeed.toString(36);
                 const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
-                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, maxOutputTokens: 3000 });
+                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, presencePenalty: 0.6, frequencyPenalty: 0.4, maxOutputTokens: 3000 });
                 try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
                 if (aiData) break;
             } catch (e) {
