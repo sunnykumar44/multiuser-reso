@@ -478,6 +478,72 @@ async function callGeminiFlash(promptText, opts = {}) {
   throw lastErr || new Error('Gemini API failed');
 }
 
+function normalizeJD(jdRaw = '') {
+  let s = String(jdRaw || '').trim();
+  if (!s) return '';
+  s = s.replace(/\s+/g, ' ');
+
+  // Common misspellings / variants for roles & skills
+  const map = [
+    [/\bdata\s*analy(st|ts)\b/gi, 'data analyst'],
+    [/\bdata\s*analys(t|ts)\b/gi, 'data analyst'],
+    [/\bdata\s*analyst\b/gi, 'data analyst'],
+    [/\bjava\s*dev(eloper)?\b/gi, 'java developer'],
+    [/\bpy(thon)?\s*dev(eloper)?\b/gi, 'python developer'],
+    [/\bsoftw(are)?\s*eng(ineer)?\b/gi, 'software engineer'],
+    [/\bweb\s*dev(eloper)?\b/gi, 'web developer'],
+    [/\bmid(?:dle)?\s*ware\b/gi, 'middleware'],
+
+    // Tech typos
+    [/\bpostgre\s*sql\b/gi, 'PostgreSQL'],
+    [/\bpostgress\b/gi, 'PostgreSQL'],
+    [/\bjavscript\b/gi, 'JavaScript'],
+    [/\btype\s*script\b/gi, 'TypeScript'],
+    [/\bpower\s*bi\b/gi, 'PowerBI'],
+    [/\btablue\b/gi, 'Tableau'],
+    [/\bexcell\b/gi, 'Excel'],
+    [/\bscikit\s*learn\b/gi, 'Scikit-learn'],
+    [/\bjup(y)?ter\b/gi, 'Jupyter'],
+    [/\brest\s*api\b/gi, 'REST APIs'],
+  ];
+
+  for (const [re, rep] of map) s = s.replace(re, rep);
+  return s;
+}
+
+function looksLikeGarbageJD(s) {
+  const t = String(s || '').trim();
+  if (!t) return true;
+  if (t.length < 6) return true;
+  const letters = (t.match(/[a-z]/gi) || []).length;
+  const spaces = (t.match(/\s/g) || []).length;
+  const words = t.split(/\s+/).filter(Boolean);
+  const avgWord = words.length ? (t.replace(/\s+/g, '').length / words.length) : t.length;
+  const nonAlphaNum = (t.match(/[^a-z0-9\s]/gi) || []).length;
+
+  // Heuristics for nonsense: very long single token / low spaces, lots of symbols, weird word lengths
+  if (words.length <= 1 && t.length >= 12) return true;
+  if (spaces === 0 && t.length >= 10) return true;
+  if (letters / Math.max(t.length, 1) < 0.55) return true;
+  if (nonAlphaNum / Math.max(t.length, 1) > 0.25) return true;
+  if (avgWord > 14) return true;
+  return false;
+}
+
+function inferRoleFromProfile(profile = {}) {
+  const skills = Array.isArray(profile.skills) ? profile.skills.map(s => String(s).toLowerCase()) : [];
+  const exp = Array.isArray(profile.customSections) ? JSON.stringify(profile.customSections).toLowerCase() : '';
+
+  const has = (k) => skills.some(s => s.includes(k)) || exp.includes(k);
+
+  if (has('tableau') || has('powerbi') || has('excel') || has('pandas') || has('numpy') || has('sql')) return 'data analyst';
+  if (has('spark') || has('airflow') || has('etl') || has('warehouse') || has('bigquery')) return 'data engineer';
+  if (has('spring') || has('hibernate') || has('java')) return 'java developer';
+  if (has('django') || has('flask') || has('python')) return 'python developer';
+  if (has('react') || has('frontend') || has('node') || has('javascript')) return 'web developer';
+  return 'software engineer';
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -493,11 +559,20 @@ module.exports = async (req, res) => {
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
     const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
     const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
-    
+
+    // Normalize JD to handle typos before any logic
+    let jdNormalized = normalizeJD(jd);
+    let jdWasInferred = false;
+    if (looksLikeGarbageJD(jdNormalized)) {
+      const inferredRole = inferRoleFromProfile(profile);
+      jdNormalized = inferredRole;
+      jdWasInferred = true;
+    }
+
     const userKey = getUserKey({ ...body, profile }, req);
     const remainingInfo = getRemaining(userKey);
 
-    if (!jd || typeof jd !== 'string' || !jd.trim()) {
+    if (!jdNormalized || typeof jdNormalized !== 'string' || !jdNormalized.trim()) {
       return res.status(400).json({ ok: false, error: 'Missing required field: jd', debug: { requestSeed, aiEnabled: !!GEMINI_API_KEY, aiOnly, daily: remainingInfo } });
     }
 
@@ -518,21 +593,21 @@ module.exports = async (req, res) => {
 
     // CRITICAL FIX: Expand short JDs before building sections
     const finalJD = (() => {
-      if (!jd || jd.trim().length < 50) {
-        const role = (jd || '').trim().toLowerCase();
+      if (!jdNormalized || jdNormalized.trim().length < 50) {
+        const role = (jdNormalized || '').trim().toLowerCase();
         if (role.includes('software') || role.includes('developer')) {
-          return `${jd} with experience in Python, Java, JavaScript, REST APIs, SQL databases, Git version control, and Agile methodology. Strong problem-solving and communication skills required.`;
+          return `${jdNormalized} with experience in Python, Java, JavaScript, REST APIs, SQL databases, Git version control, and Agile methodology. Strong problem-solving and communication skills required.`;
         } else if (role.includes('data')) {
-          return `${jd} with proficiency in Python, SQL, Pandas, NumPy, Tableau, Excel, and data visualization. Strong analytical and communication skills.`;
+          return `${jdNormalized} with proficiency in Python, SQL, Pandas, NumPy, Tableau, Excel, and data visualization. Strong analytical and communication skills.`;
         } else if (role.includes('web')) {
-          return `${jd} with knowledge of HTML, CSS, JavaScript, React, Node.js, REST APIs, MongoDB, and Git.`;
+          return `${jdNormalized} with knowledge of HTML, CSS, JavaScript, React, Node.js, REST APIs, MongoDB, and Git.`;
         } else if (role.includes('java')) {
-          return `${jd} with Spring Boot, Hibernate, MySQL, REST APIs, Maven, Jenkins, and Git experience.`;
-        } else if (jd && jd.trim().length > 0) {
-          return `${jd} with relevant technical skills, programming languages, frameworks, databases, and strong problem-solving abilities.`;
+          return `${jdNormalized} with Spring Boot, Hibernate, MySQL, REST APIs, Maven, Jenkins, and Git experience.`;
+        } else if (jdNormalized && jdNormalized.trim().length > 0) {
+          return `${jdNormalized} with relevant technical skills, programming languages, frameworks, databases, and strong problem-solving abilities.`;
         }
       }
-      return jd || '';
+      return jdNormalized || '';
     })();
 
     // Role preset for strong deterministic fallbacks and validation
@@ -705,7 +780,7 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo };
+    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized };
 
     // Build intelligentPrompt (required for AI path)
     const intelligentPrompt = `
@@ -718,6 +793,7 @@ USER PROFILE (may be partial): ${JSON.stringify(profile).slice(0, 1500)}
 
 STRICT VARIATION REQUIREMENTS:
 - Every generation MUST be meaningfully different in wording and examples.
+- Use VARIATION_SEED to pick different examples, metrics, and ordering.
 - Do NOT repeat the same certification twice.
 - Do NOT duplicate the same skill token.
 - Projects must be different from each other (different problem + dataset + technique).
@@ -731,7 +807,7 @@ RULES:
 4) Return VALID JSON ONLY with these keys: ${Object.keys(aiPrompts).join(', ')}
 
 SECTION INSTRUCTIONS:
-${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
+${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v} || VARIATION_NONCE:${requestSeed}:${k}`).join('\n')}
 
 OUTPUT: JSON only. No markdown.
 `;
@@ -791,7 +867,9 @@ OUTPUT: JSON only. No markdown.
                     for (const pick of shuffled) { if (techParts.length >= 12) break; if (!techParts.some(x => x.toLowerCase() === pick.toLowerCase())) techParts.push(pick); }
 
                     techParts = uniqCaseInsensitive(techParts);
-                     if (techParts.length < 8) {
+                    // Reorder with request-seeded randomness so even similar sets render differently
+                    techParts = shuffleSeeded(techParts, rand);
+                    if (techParts.length < 8) {
                         // fallback using dynamic fallback
                         const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
@@ -799,8 +877,8 @@ OUTPUT: JSON only. No markdown.
                         return;
                      }
                     const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                     return;
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                    return;
                 }
 
                 // TRAITS (soft chips)
@@ -817,7 +895,7 @@ OUTPUT: JSON only. No markdown.
                 // CERTIFICATIONS
                 if (type === 'list' && label === 'Certifications') {
                     let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    const certs = enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []);
+                    const certs = rotateBySeed(enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []), rand);
                     const lis = certs.map(b => `<li>${b}</li>`).join('');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     return;
@@ -826,7 +904,8 @@ OUTPUT: JSON only. No markdown.
                 // ACHIEVEMENTS
                 if (type === 'list' && label === 'Achievements') {
                     let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    const achs = augmentAchievements(parts, rolePreset);
+                    let achs = augmentAchievements(parts, rolePreset);
+                    achs = rotateBySeed(achs, rand).map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
                     const lis = achs.map(b => `<li>${b}</li>`).join('');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     return;
@@ -838,14 +917,10 @@ OUTPUT: JSON only. No markdown.
                     const techs = rolePreset.skills || [];
                     const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
                     if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
+                    // Guaranteed visible variation
+                    s = seededSynonymSwap(s, rand);
+                    s = seededBumpMetric(s, rand);
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
-                    return;
-                }
-
-                // Default for list/others
-                if (type === 'list') {
-                    const lis = val.split('|').map(b => `<li>${b.trim()}</li>`).join('');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     return;
                 }
 
@@ -861,6 +936,8 @@ OUTPUT: JSON only. No markdown.
                     parts = enforceNDistinct(parts, 2, presetParts);
                     // Always exactly 2
                     parts = parts.slice(0, 2);
+                    // Guaranteed visible variation: rotate order + tweak wording/metrics
+                    parts = rotateBySeed(parts, rand).map(p => seededBumpMetric(seededSynonymSwap(p, rand), rand));
                     parts = parts.map(p => { if (isLikelyTechnical(p)) return p; return augmentProjectIfNeeded(p, rolePreset); });
                     const lis = parts.map(b => `<li>${b}</li>`).join('');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
@@ -979,4 +1056,49 @@ function enforceNDistinct(items, n, fallbackPool = []) {
     if (!uniq.some(x => x.toLowerCase() === cand.toLowerCase())) uniq.push(cand);
   }
   return uniq.slice(0, n);
+}
+
+function seededPermuteString(s, rand) {
+  const parts = String(s || '').split(' ');
+  return shuffleSeeded(parts, rand).join(' ');
+}
+
+function rotateBySeed(arr, rand) {
+  if (!Array.isArray(arr) || arr.length < 2) return arr;
+  const k = Math.floor(rand() * arr.length);
+  return arr.slice(k).concat(arr.slice(0, k));
+}
+
+function seededSynonymSwap(text, rand) {
+  let s = String(text || '');
+  const swaps = [
+    ['Highly motivated', 'Driven'],
+    ['Aspiring', 'Entry-level'],
+    ['strong', 'solid'],
+    ['proven', 'demonstrated'],
+    ['eager', 'keen'],
+    ['leverage', 'apply'],
+    ['utilized', 'used'],
+    ['developed', 'built'],
+    ['optimized', 'improved'],
+  ];
+  // Apply a few swaps deterministically
+  const count = 2 + Math.floor(rand() * 2);
+  const picked = rotateBySeed(swaps, rand).slice(0, count);
+  for (const [from, to] of picked) {
+    const re = new RegExp(`\\b${from}\\b`, 'i');
+    if (re.test(s) && rand() > 0.3) s = s.replace(re, to);
+  }
+  return s;
+}
+
+function seededBumpMetric(text, rand) {
+  // Nudge percentages slightly so repeated gens don't look identical
+  return String(text || '').replace(/(~?)(\d{1,2})(%)?/g, (m, tilde, num, pct) => {
+    const n = Number(num);
+    if (!pct || Number.isNaN(n) || n < 5 || n > 95) return m;
+    const delta = (rand() > 0.5 ? 1 : -1) * (1 + Math.floor(rand() * 3));
+    const nn = Math.max(5, Math.min(95, n + delta));
+    return `${tilde || ''}${nn}%`;
+  });
 }
