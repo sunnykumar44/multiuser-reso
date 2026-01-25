@@ -362,11 +362,15 @@ module.exports = async (req, res) => {
   try {
     const requestSeed = makeSeed();
     const rand = mulberry32(requestSeed);
-     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-     const { profile, jd, nickname, scope = [], aiOnly = false } = body;
+    const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+    const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
+    const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
+    if (!jd || typeof jd !== 'string' || !jd.trim()) {
+      return res.status(400).json({ ok: false, error: 'Missing required field: jd', debug: { requestSeed, aiEnabled: !!GEMINI_API_KEY, aiOnly } });
+    }
 
-     const name = (profile.fullName || nickname || "User").toUpperCase();
-     const contactLinks = [
+    const name = (profile.fullName || nickname || "User").toUpperCase();
+    const contactLinks = [
       profile.email ? `<a href="mailto:${profile.email}">${profile.email}</a>` : null,
       profile.phone,
       profile.linkedin ? `<a href="${profile.linkedin}">LinkedIn</a>` : null,
