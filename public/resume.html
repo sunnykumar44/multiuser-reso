@@ -86,6 +86,13 @@
     .magnetic:hover { transform: translateY(-6px) scale(1.02); box-shadow: 0 20px 40px rgba(0,0,0,.32); }
     .magnetic:active { transform: translateY(-2px) scale(.998); }
 
+    /* Programmatic pressed state (used by JS for consistent feel) */
+    button.force-active { transform: translateY(2px) scale(.985) !important; box-shadow: 0 6px 26px rgba(0,0,0,.28) !important; }
+
+    /* Busy/disabled state */
+    button.is-busy { opacity: .85; cursor: progress; }
+    button:disabled { opacity: .65; cursor: not-allowed; }
+
   /* Unsaved indicator: subtle dot and glow on Save button */
   button.unsaved { box-shadow: 0 8px 22px rgba(99,102,241,0.09); }
   /* smaller, noticeable unsaved dot (slightly larger than original) */

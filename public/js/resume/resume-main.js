@@ -69,21 +69,112 @@ function showToast(msg, kind = "success", ms = 1800) {
   }, ms);
 }
 
-// Ensure toast exists. Some environments or edits might remove it; create a fallback.
-;(function ensureToast() {
-  try {
-    if (!document.getElementById('toast')) {
-      const t = document.createElement('div');
-      t.id = 'toast';
-      t.setAttribute('role','status');
-      t.setAttribute('aria-live','polite');
-      t.style.display = 'none';
-  document.body.appendChild(t);
+// Unified button UX helpers (feel-click + prevent double taps)
+function withButtonFeedback(btn, fn, { busyText } = {}) {
+  if (!btn || typeof fn !== 'function') return;
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (btn.disabled) return;
+    const originalText = btn.textContent;
+    try {
+      btn.classList.add('is-busy');
+      btn.disabled = true;
+      if (busyText) btn.textContent = busyText;
+      // force pressed style for keyboard/mouse consistency
+      btn.classList.add('force-active');
+      setTimeout(() => btn.classList.remove('force-active'), 140);
+      await fn(e);
+    } catch (err) {
+      console.error('button action failed', err);
+      flashButton(btn, 'warn');
+      showToast('Action failed', 'warn');
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('is-busy');
+      if (busyText) btn.textContent = originalText;
     }
+  });
+}
+
+function clearDraftStorage() {
+  try {
+    const key = getDraftKey();
+    sessionStorage.removeItem(key);
   } catch (e) {
-    console.error('[debug] ensureToast error', e);
+    console.warn('clearDraftStorage error', e);
   }
-})();
+}
+
+function clearHistoryStorage() {
+  // history-manager owns the actual server history; this clears client session cache only.
+  try {
+    sessionStorage.removeItem(HIST_KEY);
+  } catch (e) {
+    console.warn('clearHistoryStorage error', e);
+  }
+}
+
+async function downloadAsPdf() {
+  if (!paperEl) {
+    setStatus('Nothing to print yet.', 'err');
+    return;
+  }
+  // Ensure any pending edits are present in DOM before printing
+  if (pendingHtmlOverride != null) {
+    try { paperEl.innerHTML = pendingHtmlOverride; } catch (_) {}
+  }
+  setStatus('Preparing PDF…', 'ok');
+  showToast('Opening print dialog…', 'success', 1400);
+  // Give DOM a tick to apply
+  await new Promise(r => setTimeout(r, 80));
+  window.print();
+}
+
+function goEditProfile() {
+  // Send user to unlock wall with next=edit (same pattern as lobby menu)
+  const whoNick = getEffectiveNickname();
+  window.location.href = `./unlock.html?u=${encodeURIComponent(whoNick)}&next=edit`;
+}
+
+function clearJdField() {
+  const jdField = $('jd');
+  if (jdField) jdField.value = '';
+  draft.jd = '';
+  // clearing JD invalidates html override
+  draft.htmlOverride = '';
+  saveDraft(draft);
+  updateEditBadge();
+  renderWithDraft();
+  setStatus('JD cleared.', 'ok');
+  showToast('JD cleared', 'warn', 1200);
+}
+
+function clearDraftAll() {
+  const ok = confirm('Clear draft? This will reset JD, mode/template, scope selections, and manual edits for this user.');
+  if (!ok) return;
+  clearDraftStorage();
+  draft = loadDraft();
+  lastSavedHtmlOverride = null;
+  pendingHtmlOverride = null;
+  ignoreAutosaveUntil = Date.now() + 400;
+  updateEditBadge();
+  renderWithDraft();
+  setStatus('Draft cleared.', 'ok');
+  showToast('Draft cleared', 'warn', 1400);
+}
+
+function lockSession() {
+  const ok = confirm('Lock now? You will need to unlock again to generate resumes.');
+  if (!ok) return;
+  try {
+    // Clear unlocked session
+    sessionStorage.removeItem('unlockedProfile');
+    sessionStorage.removeItem('unlockedNickname');
+  } catch (_) {}
+  showToast('Locked', 'warn', 1200);
+  window.location.href = './index.html';
+}
 
 // Session
 const rawProfile = sessionStorage.getItem("unlockedProfile");
@@ -861,6 +952,11 @@ function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,
       draft.htmlOverride = String(toSave || '');
       saveDraft(draft);
       updateEditBadge();
+      // Clear unsaved indicator + pending buffer
+      pendingHtmlOverride = null;
+      btnSaveEdits.classList.remove('unsaved');
+      // Suppress autosave briefly so blur/input triggered by the click doesn't re-mark unsaved
+      ignoreAutosaveUntil = Date.now() + 800;
       showToast('Saved edits', 'success');
     });
   }
@@ -874,6 +970,10 @@ function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,
       saveDraft(draft);
       updateEditBadge();
       renderWithDraft();
+      // Clear unsaved indicator + pending buffer
+      pendingHtmlOverride = null;
+      if (btnSaveEdits) btnSaveEdits.classList.remove('unsaved');
+      ignoreAutosaveUntil = Date.now() + 800;
       showToast('Edits reset', 'warn');
     });
   }
@@ -889,7 +989,25 @@ function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,
       saveDraft(draft);
       updateEditBadge();
       renderWithDraft();
+      // Clear unsaved indicator + pending buffer
+      pendingHtmlOverride = null;
+      if (btnSaveEdits) btnSaveEdits.classList.remove('unsaved');
+      ignoreAutosaveUntil = Date.now() + 800;
       showToast('Undo applied', 'success');
     });
   }
+})();
+
+(function wireToolbarButtons() {
+  const btnPdf = $('btnPdf');
+  const btnEdit = $('btnEdit');
+  const btnClear = $('btnClear');
+  const btnClearDraft = $('btnClearDraft');
+  const btnLogout = $('btnLogout');
+
+  withButtonFeedback(btnPdf, downloadAsPdf, { busyText: 'Preparing…' });
+  withButtonFeedback(btnEdit, async () => { goEditProfile(); }, { busyText: 'Opening…' });
+  withButtonFeedback(btnClear, async () => { clearJdField(); }, { busyText: 'Clearing…' });
+  withButtonFeedback(btnClearDraft, async () => { clearDraftAll(); }, { busyText: 'Clearing…' });
+  withButtonFeedback(btnLogout, async () => { lockSession(); }, { busyText: 'Locking…' });
 })();
