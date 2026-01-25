@@ -793,7 +793,7 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized };
+    const debug = { attempts: [], usedFallbackFor: [], invalidAI: {}, fallbackNote: '', finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized };
 
     // Build intelligentPrompt (required for AI path)
     const intelligentPrompt = `
@@ -866,13 +866,20 @@ OUTPUT: JSON only. No markdown.
                  const type = aiTypes[pid];
                  const label = aiLabels[pid] || '';
                  if (!val || typeof val !== 'string' || val.trim().length < 2) {
-                     const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
-                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
-                     debug.usedFallbackFor.push(pid);
-                     return;
-                 }
+                     // Record why this section fell back (helps diagnose intermittent AI hiccups)
+                     let reason = 'unknown';
+                     if (val === undefined || val === null) reason = 'missing';
+                     else if (typeof val !== 'string') reason = `non-string (${typeof val})`;
+                     else if (typeof val === 'string' && val.trim().length < 2) reason = 'too-short/empty';
+                     debug.invalidAI[pid] = reason;
 
-                // SKILLS: augment instead of replacing completely
+                      const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
+                      htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+                      debug.usedFallbackFor.push(pid);
+                      return;
+                  }
+
+                  // SKILLS: augment instead of replacing completely
                 if (type === 'chips' && label === 'Technical Skills') {
                     let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
                     // keep only likely technical tokens, else augment
@@ -963,7 +970,9 @@ OUTPUT: JSON only. No markdown.
 
                 // final fallback
                 htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-            });
+                 debug.invalidAI[pid] = debug.invalidAI[pid] || 'post-parse fallback';
+                 debug.usedFallbackFor.push(pid);
+             });
          } catch (e) {
              console.error('AI processing failed:', e);
              if (aiOnly) {
@@ -986,6 +995,11 @@ OUTPUT: JSON only. No markdown.
           htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
      }
 
+    // If any section fell back, attach a short note explaining why this can happen
+    if (Array.isArray(debug.usedFallbackFor) && debug.usedFallbackFor.length) {
+      debug.fallbackNote = 'AI returned an unusable value for one or more sections (missing/empty/etc.). The server used robust fallbacks for those sections to avoid failing the whole resume.';
+    }
+    
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
   } catch (err) {
