@@ -1,4 +1,5 @@
 const { saveHistory } = require("./firebase");
+const crypto = require('crypto');
 
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
 // Extracts meaningful technical and soft skills from JD
@@ -259,8 +260,31 @@ function isLikelyTechnical(token) {
   return false;
 }
 
-function randomFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-function randomPercent(min = 10, max = 40) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function makeSeed() {
+  const buf = crypto.randomBytes(8);
+  return buf.readUInt32LE(0) ^ buf.readUInt32LE(4);
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function() {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffleSeeded(arr, rand) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function randomFromSeeded(arr, rand) { return arr[Math.floor(rand() * arr.length)]; }
+function randomPercentSeeded(rand, min = 10, max = 40) { return Math.floor(rand() * (max - min + 1)) + min; }
 
 // Augment project text by inserting a role-relevant tech and a small measurable result
 function augmentProjectIfNeeded(text, rolePreset) {
@@ -331,14 +355,19 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   if (req.method === "OPTIONS") return res.status(204).end();
 
   try {
-    const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-    const { profile, jd, nickname, scope = [], aiOnly = false } = body;
+    const requestSeed = makeSeed();
+    const rand = mulberry32(requestSeed);
+     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+     const { profile, jd, nickname, scope = [], aiOnly = false } = body;
 
-    const name = (profile.fullName || nickname || "User").toUpperCase();
-    const contactLinks = [
+     const name = (profile.fullName || nickname || "User").toUpperCase();
+     const contactLinks = [
       profile.email ? `<a href="mailto:${profile.email}">${profile.email}</a>` : null,
       profile.phone,
       profile.linkedin ? `<a href="${profile.linkedin}">LinkedIn</a>` : null,
@@ -410,7 +439,7 @@ module.exports = async (req, res) => {
             // Fallback uses first JD keyword
             const kw = extractKeywordsFromJD(jd, 'technical')[0] || jd.trim().split(' ')[0] || "Technical";
             const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 3).join(', ');
-            aiFallbacks[pid] = `<p>${escapeHtml(dynamicSummary(rolePreset, finalJD))}</p>`;
+            aiFallbacks[pid] = `<p>${escapeHtml(dynamicSummary(rolePreset, finalJD, rand))}</p>`;
             aiTypes[pid] = 'summary';
             aiLabels[pid] = 'Summary';
          }
@@ -466,7 +495,7 @@ module.exports = async (req, res) => {
                         <ul id="${pid}">[${pid}]</ul>
                       </div>`;
                     aiPrompts[pid] = `MANDATORY: Rewrite experience bullet for role "${item.key}" to include keywords from: "${finalJD.slice(0,200)}". Format: 2 concise Pipe-separated bullets showing impact.`;
-                    aiFallbacks[pid] = `<li>${escapeHtml(dynamicExperienceBullet(item.key, rolePreset))}</li>`;
+                    aiFallbacks[pid] = `<li>${escapeHtml(dynamicExperienceBullet(item.key, rolePreset, rand))}</li>`;
                     aiTypes[pid] = 'list';
                     aiLabels[pid] = 'Work Experience';
                  }
@@ -522,7 +551,7 @@ module.exports = async (req, res) => {
             aiPrompts[pid] = `List 6-8 SOFT SKILLS/character traits from this JD: "${finalJD.slice(0,200)}". Examples: Communication, Teamwork, Leadership, Problem Solving. Comma-separated. NO technical skills. Minimum 6.`;
             
             // Dynamic Traits from JD SOFT SKILL Keywords - ensure minimum 6
-            let kws = dynamicTraits(finalJD);
+            let kws = dynamicTraits(finalJD, rand);
             const fallbackStr = kws.join(' | ');
             aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
             aiTypes[pid] = 'chips';
@@ -541,7 +570,7 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly };
+    const debug = { attempts: [], usedFallbackFor: [], finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed };
 
     // Build intelligentPrompt (required for AI path)
     const intelligentPrompt = `
@@ -571,7 +600,7 @@ module.exports = async (req, res) => {
         let lastError = null;
         for (const t of temps) {
             try {
-                const seed = Math.random().toString(36).substring(2,8);
+                const seed = requestSeed.toString(36);
                 const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
                 const aiJsonText = await callGeminiFlash(prompt, { temperature: t, maxOutputTokens: 3000 });
                 try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
@@ -699,44 +728,45 @@ module.exports = async (req, res) => {
   }
 };
 
-function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+// Replace unseeded implementations with seeded ones (keep old names used throughout)
+function shuffle(arr) { return shuffleSeeded(arr, () => Math.random()); }
 
-function dynamicSummary(rolePreset, finalJD) {
-  const pct = randomPercent(15, 40);
-  const core = shuffle((rolePreset.skills || []).slice()).slice(0, 3);
+// Update dynamic helpers to accept optional rand
+function dynamicSummary(rolePreset, finalJD, rand = Math.random) {
+  const pct = randomPercentSeeded(rand, 15, 40);
+  const core = shuffleSeeded((rolePreset.skills || []).slice(), rand).slice(0, 3);
   const a = `Entry-level ${finalJD.split(' with ')[0] || 'professional'} with hands-on project experience in ${core.join(', ')}.`;
   const b = `Built academic projects focused on data quality, automation, and performance optimization, achieving ~${pct}% improvements in key metrics.`;
   const c = `Strong fundamentals in problem-solving and collaboration, eager to contribute to production-grade systems and learn quickly.`;
   return `${a} ${b} ${c}`;
 }
 
-function dynamicCerts(rolePreset) {
-  // shuffle and pick 2; if none, provide safe common ones
-  const pool = (rolePreset.certs && rolePreset.certs.length) ? rolePreset.certs.slice() : ['AWS Certified Cloud Practitioner','PCEP – Certified Entry-Level Python Programmer'];
-  return shuffle(pool).slice(0,2);
+function dynamicCerts(rolePreset, rand = Math.random) {
+   const pool = (rolePreset.certs && rolePreset.certs.length) ? rolePreset.certs.slice() : ['AWS Certified Cloud Practitioner','PCEP – Certified Entry-Level Python Programmer'];
+   return shuffleSeeded(pool, rand).slice(0,2);
 }
 
-function dynamicAchievements(rolePreset) {
-  const pool = (rolePreset.achievements && rolePreset.achievements.length) ? rolePreset.achievements.slice() : [];
-  const chosen = shuffle(pool).slice(0,2);
-  return augmentAchievements(chosen.length ? chosen : ['Improved system performance', 'Automated a recurring workflow'], rolePreset);
+function dynamicAchievements(rolePreset, rand = Math.random) {
+   const pool = (rolePreset.achievements && rolePreset.achievements.length) ? rolePreset.achievements.slice() : [];
+   const chosen = shuffleSeeded(pool, rand).slice(0,2);
+   return augmentAchievements(chosen.length ? chosen : ['Improved system performance', 'Automated a recurring workflow'], rolePreset);
 }
 
-function dynamicProjects(rolePreset) {
-  const pool = (rolePreset.projects && rolePreset.projects.length) ? rolePreset.projects.slice() : [];
-  const chosen = shuffle(pool).slice(0,2);
-  return chosen.map(p => augmentProjectIfNeeded(p, rolePreset));
+function dynamicProjects(rolePreset, rand = Math.random) {
+   const pool = (rolePreset.projects && rolePreset.projects.length) ? rolePreset.projects.slice() : [];
+   const chosen = shuffleSeeded(pool, rand).slice(0,2);
+   return chosen.map(p => augmentProjectIfNeeded(p, rolePreset));
 }
 
-function dynamicTraits(finalJD) {
-  const base = extractKeywordsFromJD(finalJD, 'soft');
-  const extras = ['Ownership','Attention to Detail','Curiosity','Stakeholder Communication','Time Management','Learning Agility'];
-  return shuffle([...new Set(base.concat(extras))]).slice(0, 6);
+function dynamicTraits(finalJD, rand = Math.random) {
+   const base = extractKeywordsFromJD(finalJD, 'soft');
+   const extras = ['Ownership','Attention to Detail','Curiosity','Stakeholder Communication','Time Management','Learning Agility'];
+   return shuffleSeeded([...new Set(base.concat(extras))], rand).slice(0, 6);
 }
 
-function dynamicExperienceBullet(role, rolePreset) {
-  const actions = ['Collaborated on', 'Developed', 'Optimized', 'Managed', 'Assisted with', 'Implemented'];
-  const techs = shuffle((rolePreset.skills || []).slice()).slice(0, 2);
-  const outcomes = ['improving workflow efficiency by ~15%', 'reducing processing latency', 'enhancing system reliability', 'supporting data-driven decision making', 'streamlining internal processes'];
-  return `${randomFrom(actions)} ${role} components using ${techs.join(' and ')}, ${randomFrom(outcomes)}.`;
+function dynamicExperienceBullet(role, rolePreset, rand = Math.random) {
+   const actions = ['Collaborated on', 'Developed', 'Optimized', 'Managed', 'Assisted with', 'Implemented'];
+   const techs = shuffleSeeded((rolePreset.skills || []).slice(), rand).slice(0, 2);
+   const outcomes = ['improving workflow efficiency by ~15%', 'reducing processing latency', 'enhancing system reliability', 'supporting data-driven decision making', 'streamlining internal processes'];
+   return `${randomFromSeeded(actions, rand)} ${role} components using ${techs.join(' and ')}, ${randomFromSeeded(outcomes, rand)}.`;
 }
