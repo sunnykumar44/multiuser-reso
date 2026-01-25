@@ -756,7 +756,7 @@ OUTPUT: JSON only. No markdown.
             try {
                 const seed = requestSeed.toString(36);
                 const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
-                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, presencePenalty: 0.6, frequencyPenalty: 0.4, maxOutputTokens: 3000 });
+                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, maxOutputTokens: 3000 });
                 try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
                 if (aiData) break;
             } catch (e) {
