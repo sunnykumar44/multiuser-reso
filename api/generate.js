@@ -154,6 +154,57 @@ function getSmartFallback(section, jd, rand = Math.random) {
   return "";
 }
 
+// --------------------
+// Fallback content builders (must never throw)
+// --------------------
+function randomPercent(rand = Math.random, min = 10, max = 40) {
+  return Math.floor(rand() * (max - min + 1)) + min;
+}
+
+function dynamicSummary(rolePreset, finalJD, rand = Math.random) {
+  try {
+    const role = String(finalJD || '').split(' with ')[0].trim() || 'the role';
+    const skills = Array.isArray(rolePreset?.skills) ? rolePreset.skills : ['Python', 'SQL', 'Git'];
+    const top = shuffleSeeded(skills.slice(), rand).slice(0, 4);
+    const pct = randomPercent(rand, 12, 35);
+    return `Entry-level candidate targeting ${role} roles with hands-on project experience and strong fundamentals in ${top.join(', ')}. Built resume-ready projects aligned to job requirements, focusing on clean implementation, debugging, and measurable outcomes. Demonstrated ability to learn quickly, collaborate effectively, and deliver improvements of ~${pct}% in efficiency/quality in simulated or academic work.`;
+  } catch (_) {
+    return 'Entry-level candidate with strong technical fundamentals and hands-on project experience aligned to the target role. Motivated, adaptable, and eager to contribute in a collaborative environment.';
+  }
+}
+
+function dynamicCerts(rolePreset, rand = Math.random) {
+  const certs = Array.isArray(rolePreset?.certs) ? rolePreset.certs : [];
+  const picked = shuffleSeeded(certs.slice(), rand).slice(0, 2);
+  return picked.length ? picked : ['PCEP – Certified Entry-Level Python Programmer'];
+}
+
+function dynamicProjects(rolePreset, rand = Math.random) {
+  const projs = Array.isArray(rolePreset?.projects) ? rolePreset.projects : [];
+  const picked = shuffleSeeded(projs.slice(), rand).slice(0, 2);
+  return picked.length ? picked : ['<b>Demo Project:</b> Built a role-aligned CRUD app with measurable improvements.'];
+}
+
+function dynamicAchievements(rolePreset, rand = Math.random) {
+  const ach = Array.isArray(rolePreset?.achievements) ? rolePreset.achievements : [];
+  const picked = shuffleSeeded(ach.slice(), rand).slice(0, 2);
+  return picked.length ? picked : [`Improved performance by ${randomPercent(rand)}% through optimization`, `Automated repetitive tasks saving ${randomPercent(rand)}% time`];
+}
+
+function dynamicExperienceBullet(title, rolePreset, rand = Math.random) {
+  const skills = Array.isArray(rolePreset?.skills) ? rolePreset.skills : ['Python', 'SQL'];
+  const tech = shuffleSeeded(skills.slice(), rand)[0] || 'relevant tools';
+  const pct = randomPercent(rand, 10, 35);
+  return `${String(title || 'Role')} – Delivered role-aligned tasks using ${tech}, improving turnaround time by ~${pct}%.`;
+}
+
+function dynamicTraits(finalJD, rand = Math.random) {
+  const fromJD = extractKeywordsFromJD(finalJD, 'soft');
+  const base = ['Communication', 'Teamwork', 'Problem Solving', 'Adaptability', 'Time Management', 'Attention to Detail'];
+  const merged = [...new Set([...fromJD, ...base])];
+  return shuffleSeeded(merged, rand).slice(0, 6);
+}
+
 function escapeHtml(s = "") {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
