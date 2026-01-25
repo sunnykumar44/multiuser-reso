@@ -852,7 +852,7 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], invalidAI: {}, fallbackNote: '', finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized };
+    const debug = { attempts: [], usedFallbackFor: [], invalidAI: {}, fallbackNote: '', retryAfterSeconds: 0, finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized };
 
     // Build intelligentPrompt (required for AI path)
     const intelligentPrompt = `
@@ -896,6 +896,16 @@ OUTPUT: JSON only. No markdown.
           });
         }
 
+        // Allow refunding daily ticket if Gemini quota blocks the request (429)
+        const refundDailyTicket = () => {
+          try {
+            const state = globalThis.__DAILY_LIMIT_STATE__;
+            if (!state || !state.byUser) return;
+            const used = Number(state.byUser.get(userKey) || 0);
+            if (used > 0) state.byUser.set(userKey, used - 1);
+          } catch (_) {}
+        };
+
          // try AI with retries for short JD to encourage variability
          const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
          let aiData = null;
@@ -913,7 +923,15 @@ OUTPUT: JSON only. No markdown.
 
                 // If Gemini is rate-limiting, don't spin; fall back immediately
                 const msg = String(e && e.message ? e.message : '');
-                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) break;
+                const retryMs = parseRetryDelayMs(msg);
+                if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+                debug.attempts.push({ temp: t, parsed: false, error: msg });
+
+                // If Gemini is rate-limiting, don't spin; fall back immediately
+                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+                  refundDailyTicket();
+                   break;
+                 }
             }
          }
 
@@ -1029,10 +1047,22 @@ OUTPUT: JSON only. No markdown.
              if (aiOnly) {
                const msg = String(e.message || 'AI failed');
                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                 return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
+                 const retryMs = parseRetryDelayMs(msg);
+                 if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+                 refundDailyTicket();
+                  return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
                }
                return res.status(503).json({ ok: false, error: msg, debug });
              }
+            // If quota/rate-limited, do not burn daily counter
+            {
+              const msg = String(e && e.message ? e.message : '');
+              if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+                const retryMs = parseRetryDelayMs(msg);
+                if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+                refundDailyTicket();
+              }
+            }
              Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
              // Ensure fallback still looks dynamic per request
              htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
