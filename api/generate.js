@@ -788,44 +788,36 @@ OUTPUT: JSON only. No markdown.
                     techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
                     // add random preset skills to reach minimum using shuffled presets
                     const shuffled = shuffle((rolePreset.skills || []).slice());
-                    for (const pick of shuffled) { if (techParts.length >= 8) break; if (!techParts.includes(pick)) techParts.push(pick); }
-                    if (techParts.length < 8) {
+                    for (const pick of shuffled) { if (techParts.length >= 12) break; if (!techParts.some(x => x.toLowerCase() === pick.toLowerCase())) techParts.push(pick); }
+
+                    techParts = uniqCaseInsensitive(techParts);
+                     if (techParts.length < 8) {
                         // fallback using dynamic fallback
                         const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
                         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
                         debug.usedFallbackFor.push(pid);
                         return;
-                    }
+                     }
                     const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    return;
+                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                     return;
                 }
 
                 // TRAITS (soft chips)
                 if (type === 'chips' && label && label.toLowerCase().includes('character')) {
                     let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
-                    let soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,8);
+                    let soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,12);
                     const extras = extractKeywordsFromJD(finalJD, 'soft');
-                    let idx = 0;
-                    while (soft.length < 6 && idx < extras.length) { if (!soft.includes(extras[idx])) soft.push(extras[idx]); idx++; }
+                    soft = enforceNDistinct(soft, 6, extras.concat(['Ownership','Curiosity','Learning Agility','Collaboration','Time Management','Adaptability','Attention to Detail']));
                     const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    return;
-                }
-
-                // PROJECTS
-                if (type === 'list' && label === 'Projects') {
-                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    parts = parts.map(p => { if (isLikelyTechnical(p)) return p; return augmentProjectIfNeeded(p, rolePreset); });
-                    const lis = parts.map(b => `<li>${b}</li>`).join('');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     return;
                 }
 
                 // CERTIFICATIONS
                 if (type === 'list' && label === 'Certifications') {
                     let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    const certs = augmentCerts(parts, rolePreset);
+                    const certs = enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []);
                     const lis = certs.map(b => `<li>${b}</li>`).join('');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     return;
@@ -853,6 +845,24 @@ OUTPUT: JSON only. No markdown.
                 // Default for list/others
                 if (type === 'list') {
                     const lis = val.split('|').map(b => `<li>${b.trim()}</li>`).join('');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                    return;
+                }
+
+                // PROJECTS
+                if (type === 'list' && label === 'Projects') {
+                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
+                    parts = uniqCaseInsensitive(parts);
+                    // Fill from role preset if AI returned < 2
+                    const preset = Array.isArray(rolePreset.projects) ? rolePreset.projects : [];
+                    const presetParts = preset.length
+                      ? preset.flatMap(p => String(p).split('|').map(x => x.trim()).filter(Boolean))
+                      : [];
+                    parts = enforceNDistinct(parts, 2, presetParts);
+                    // Always exactly 2
+                    parts = parts.slice(0, 2);
+                    parts = parts.map(p => { if (isLikelyTechnical(p)) return p; return augmentProjectIfNeeded(p, rolePreset); });
+                    const lis = parts.map(b => `<li>${b}</li>`).join('');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     return;
                 }
@@ -935,4 +945,38 @@ function randomFrom(arr) {
 
 function randomPercent(min = 10, max = 40) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function uniqCaseInsensitive(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const x of arr) {
+    const k = String(x || '').trim();
+    if (!k) continue;
+    const key = k.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(k);
+  }
+  return out;
+}
+
+function enforceTwoDistinct(items, fallbackPool = []) {
+  const uniq = uniqCaseInsensitive(items);
+  const pool = uniqCaseInsensitive(fallbackPool);
+  while (uniq.length < 2 && pool.length) {
+    const cand = pool.shift();
+    if (!uniq.some(x => x.toLowerCase() === cand.toLowerCase())) uniq.push(cand);
+  }
+  return uniq.slice(0, 2);
+}
+
+function enforceNDistinct(items, n, fallbackPool = []) {
+  const uniq = uniqCaseInsensitive(items);
+  const pool = uniqCaseInsensitive(fallbackPool);
+  while (uniq.length < n && pool.length) {
+    const cand = pool.shift();
+    if (!uniq.some(x => x.toLowerCase() === cand.toLowerCase())) uniq.push(cand);
+  }
+  return uniq.slice(0, n);
 }
