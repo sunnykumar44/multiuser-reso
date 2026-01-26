@@ -24,16 +24,18 @@ module.exports = async (req, res) => {
     const limit = Math.max(1, Math.min(limitRaw || 20, 50));
 
     const db = initDb();
+    // Avoid requiring a composite index (where + orderBy). Fetch recent docs and filter in-memory.
     const snap = await db
       .collection('resume_history')
-      .where('nickname', '==', nickname)
       .orderBy('createdAt', 'desc')
-      .limit(limit)
+      .limit(Math.max(limit * 10, 50))
       .get();
 
     const items = [];
     snap.forEach(doc => {
       const d = doc.data() || {};
+      const n = normalizeNickname(d.nickname);
+      if (n !== nickname) return;
       items.push({
         id: String(d.id || doc.id),
         title: String(d.title || ''),
@@ -44,7 +46,9 @@ module.exports = async (req, res) => {
       });
     });
 
-    return res.status(200).json({ ok: true, nickname, items });
+    // createdAt is ISO; string sort is OK, but be explicit
+    items.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    return res.status(200).json({ ok: true, nickname, items: items.slice(0, limit) });
   } catch (e) {
     return res.status(500).json({ ok: false, error: (e && e.message) ? e.message : 'Failed to load history' });
   }

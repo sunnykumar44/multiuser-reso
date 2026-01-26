@@ -1008,7 +1008,8 @@ function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,
   withButtonFeedback(btnLogout, async () => { lockSession(); }, { busyText: 'Locking…' });
 })();
 
-function $(sel) { return document.querySelector(sel); }
+// history-manager wiring (recent resumes)
+function $qs(sel) { return document.querySelector(sel); }
 
 function normalizeNickname(n) {
   return String(n || '')
