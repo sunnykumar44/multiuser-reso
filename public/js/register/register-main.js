@@ -284,15 +284,21 @@ form.addEventListener("submit", async (e) => {
 
     // Cloud sync (encrypted blob only)
     try {
-      await fetch('/api/profile', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname, blob, createdAt: new Date().toISOString() }),
-      });
-    } catch (e) {
-      // Non-fatal: local save still succeeded
+      const syncResp = await fetch('/api/profile', {
+         method: 'PUT',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ nickname, blob, createdAt: new Date().toISOString() }),
+       });
+      if (!syncResp.ok) {
+        const t = await syncResp.text().catch(() => '');
+        console.warn('Cloud sync failed response:', syncResp.status, t);
+        setStatus(`Saved locally. Cloud sync failed (${syncResp.status}).`, 'err');
+      }
+     } catch (e) {
+       // Non-fatal: local save still succeeded
       console.warn('Cloud sync failed (still saved locally)', e);
-    }
+      setStatus('Saved locally. Cloud sync failed (network).', 'err');
+     }
 
     // Keep session in sync so resume page can immediately reflect changes
     try {

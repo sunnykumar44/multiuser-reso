@@ -2,7 +2,7 @@ const { saveEncryptedProfile, getEncryptedProfile } = require('./firebase');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'OPTIONS') return res.status(204).end();
@@ -15,13 +15,13 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, nickname: out.nickname, blob: out.blob, updatedAt: out.updatedAt });
     }
 
-    if (req.method === 'PUT') {
+    if (req.method === 'PUT' || req.method === 'POST') {
       const body = (typeof req.body === 'object') ? req.body : JSON.parse(req.body || '{}');
       const nickname = String(body.nickname || '');
       const blob = body.blob;
       const createdAt = body.createdAt ? String(body.createdAt) : undefined;
       const out = await saveEncryptedProfile({ nickname, blob, createdAt });
-      return res.status(200).json({ ok: true, nickname: out.nickname, updatedAt: out.updatedAt });
+      return res.status(200).json({ ok: true, nickname: out.nickname, updatedAt: out.updatedAt, debug: { saved: true } });
     }
 
     return res.status(405).json({ ok: false, error: 'Method not allowed' });

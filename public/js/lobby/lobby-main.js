@@ -228,4 +228,8 @@ function renderUsers() {
   countHint.textContent = localNicknames.length ? `${localNicknames.length} user(s)` : 'Loading…';
 }
 
-renderUsers();
+// Ensure we only render once per page load
+if (!window.__LOBBY_RENDERED__) {
+  window.__LOBBY_RENDERED__ = true;
+  renderUsers();
+}
