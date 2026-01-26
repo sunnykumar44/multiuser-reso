@@ -214,39 +214,15 @@ function getDraftKey() {
   return `resumeDraft:${getEffectiveNickname()}`;
 }
 
-// --------------------
-// Debug helpers
-// --------------------
-function nowISO() {
-  return new Date().toISOString();
-}
-
-function safeParseJSON(s, fallback) {
-  try { return JSON.parse(s); } catch { return fallback; }
-}
-
-// --------------------
-// Draft model
-// --------------------
-function defaultDraft() {
-  return {
-    schema: "resume_draft_v1",
-    updatedAt: nowISO(),
-    jd: "",
-    mode: "ats",
-    template: "classic",
-    scope: [],              // array of section titles selected for AI
-    aiOnlySections: [],     // array of { type, title, placement, items, keepEmpty:true }
-    htmlOverride: ""        // saved edited HTML
-  };
-}
-
 function loadDraft() {
   try {
     const key = getDraftKey();
     const raw = sessionStorage.getItem(key);
     if (!raw) return defaultDraft();
+    // Back-compat: older builds accidentally stored raw HTML under resumeDraft:<nick>.
+    // If it's not a JSON object, ignore it so profile rendering works.
     const d = safeParseJSON(raw, null);
+    if (typeof d === 'string') return defaultDraft();
     if (!d || d.schema !== "resume_draft_v1") return defaultDraft();
     // normalize
     if (!Array.isArray(d.scope)) d.scope = [];
@@ -472,6 +448,8 @@ function loadHistoryItem(item) {
   draft.mode = item.mode;
   draft.template = item.template;
   draft.htmlOverride = "";
+  // If history item includes html, store it in draft.htmlOverride (not raw key)
+  if (item && item.htmlSnapshot) draft.htmlOverride = String(item.htmlSnapshot || '');
   saveDraft(draft);
 
   // Render directly from the draft without triggering Generate (avoids re-recording history)
@@ -1097,8 +1075,8 @@ async function ensureProfileAndInitialRender() {
   if (isEmptyPaper) {
     try {
       const mod = await import('./resume-render.js');
-      const draftKey = `resumeDraft:${(sessionStorage.getItem('unlockedNickname') || '').trim().toLowerCase()}`;
-      const htmlOverride = sessionStorage.getItem(draftKey) || '';
+      const d = loadDraft();
+      const htmlOverride = (d && typeof d.htmlOverride === 'string') ? d.htmlOverride : '';
       mod.renderPaper({
         paperEl: paper,
         profile,

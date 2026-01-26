@@ -170,19 +170,28 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
           .map((e) => {
             const key = String(e.key || "").trim().replace(/[“”"]/g, "");
             const date = String(e.date || "").trim();
-            const b = Array.isArray(e.bullets) ? e.bullets : [];
-            if (!key && !hasArr(b)) return "";
-            return `
-              ${key ? `
-                <div class="r-text" style="font-weight:800;margin-top:6px; display:flex; justify-content:space-between; gap:10px;" ${EDIT_ATTRS}>
-                  <span>${key}</span>
-                  <span class="muted" style="white-space:nowrap;">${date}</span>
-                </div>
-              ` : ""}
-              ${hasArr(b) ? `<ul class="r-bullets">${b.map((x) => `<li ${EDIT_ATTRS}>${x}</li>`).join("")}</ul>` : ""}
-            `;
-          })
-          .join("");
+            const b0 = Array.isArray(e.bullets) ? e.bullets : [];
+            // If a bullet redundantly starts with the role/project name (e.g. "Data Analyst – ..."), strip it.
+            const b = b0.map((x) => {
+              const s = String(x || '').trim();
+              if (!key || !s) return s;
+              const k = String(key).trim();
+              const re = new RegExp('^' + k.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&') + '\\s*[\u2013\u2014\-:]\\s*', 'i');
+              const stripped = s.replace(re, '').trim();
+              return ensureWordRange(stripped, 27, 32);
+             });
+             if (!key && !hasArr(b)) return "";
+             return `
+               ${key ? `
+                 <div class="r-text" style="font-weight:800;margin-top:6px; display:flex; justify-content:space-between; gap:10px;" ${EDIT_ATTRS}>
+                   <span>${key}</span>
+                   <span class="muted" style="white-space:nowrap;">${date}</span>
+                 </div>
+               ` : ""}
+               ${hasArr(b) ? `<ul class="r-bullets">${b.map((x) => `<li ${EDIT_ATTRS}>${x}</li>`).join("")}</ul>` : ""}
+             `;
+           })
+           .join("");
 
     return `
       <div class="r-section">
@@ -202,7 +211,7 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
 
     const content = isEmpty
       ? `<div class="r-text muted" style="font-style:italic;" ${EDIT_ATTRS}>(AI will fill this list)</div>`
-      : `<ul class="r-bullets">${items.map((it) => `<li ${EDIT_ATTRS}>${it}</li>`).join("")}</ul>`;
+      : `<ul class="r-bullets">${items.map((it) => `<li ${EDIT_ATTRS}>${ensureWordRange(String(it || '').trim(), 27, 32)}</li>`).join("")}</ul>`;
 
     return `
       <div class="r-section">
@@ -246,7 +255,7 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
       </div>
     ` : ""}
 
-    ${(hasText(college) || hasText(branch) || hasText(eduYears)) ? `
+    ${(hasText(college) || hasText(branch) || String(eduYears || '').trim()) ? `
       <div class="r-section">
         <div class="r-title">Education</div>
         <div class="r-text" style="display:flex; justify-content:space-between; gap:10px;" ${EDIT_ATTRS}>
@@ -254,7 +263,7 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
             ${hasText(college) ? `<div style="font-weight:800;">${college}</div>` : ''}
             ${hasText(branch) ? `<div class="muted">${branch}</div>` : ''}
           </div>
-          <div class="muted" style="white-space:nowrap; align-self:flex-start; font-weight:800;">${eduYears}</div>
+          <div class="muted" style="white-space:nowrap; align-self:flex-start; font-weight:800;">${eduYears || ''}</div>
         </div>
       </div>
     ` : ""}
@@ -281,4 +290,39 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
     ${otherEntries.map(renderEntriesSection).join("")}
     ${otherBullets.map(renderBulletsSection).join("")}
   `;
+}
+
+function wordCount(s) {
+  return String(s || '').trim().split(/\s+/).filter(Boolean).length;
+}
+
+function ensureWordRange(text, minWords = 27, maxWords = 32) {
+  let s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return s;
+
+  // Split into words; keep punctuation attached to words (good enough for UX)
+  const words = s.split(' ').filter(Boolean);
+  if (words.length > maxWords) {
+    return words.slice(0, maxWords).join(' ').replace(/[,;:]?$/, '') + '.';
+  }
+  if (words.length < minWords) {
+    // Pad with a neutral tail that doesn't remove numbers/metrics.
+    const pad = [
+      'using best practices,',
+      'ensuring data quality,',
+      'improving reliability,',
+      'and collaborating with stakeholders.'
+    ].join(' ');
+    let out = s;
+    while (wordCount(out) < minWords) {
+      out = (out + ' ' + pad).replace(/\s+/g, ' ').trim();
+      if (wordCount(out) > maxWords) {
+        out = out.split(' ').slice(0, maxWords).join(' ').trim();
+        break;
+      }
+    }
+    if (!/[.!?]$/.test(out)) out += '.';
+    return out;
+  }
+  return s;
 }
