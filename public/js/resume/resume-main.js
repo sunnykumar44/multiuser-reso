@@ -1104,3 +1104,104 @@ async function wireRecentResumes() {
 
 // Wire after DOM
 document.addEventListener('DOMContentLoaded', wireRecentResumes);
+
+function safeParseJson(raw, fallback) {
+  try { return JSON.parse(raw); } catch { return fallback; }
+}
+
+function setWhoBadge() {
+  const el = document.getElementById('who');
+  if (!el) return;
+  const nick = (sessionStorage.getItem('unlockedNickname') || '').trim();
+  if (!nick) {
+    el.textContent = '';
+    return;
+  }
+  el.textContent = `Logged in as: ${nick}`;
+}
+
+async function ensureProfileAndInitialRender() {
+  // If resume-main already loaded profile elsewhere, don't fight it
+  const paper = document.getElementById('paper');
+  if (!paper) return;
+
+  const raw = sessionStorage.getItem('unlockedProfile');
+  const profile = raw ? safeParseJson(raw, null) : null;
+  if (!profile || typeof profile !== 'object') {
+    // No unlocked session -> send to lobby
+    const status = document.getElementById('status');
+    if (status) status.textContent = 'Session locked. Please unlock again.';
+    setTimeout(() => { window.location.href = './index.html'; }, 600);
+    return;
+  }
+
+  setWhoBadge();
+
+  // Render profile to paper if it's currently empty
+  const isEmptyPaper = !paper.innerHTML || paper.innerHTML.trim().length < 10;
+  if (isEmptyPaper) {
+    try {
+      const mod = await import('./resume-render.js');
+      const draftKey = `resumeDraft:${(sessionStorage.getItem('unlockedNickname') || '').trim().toLowerCase()}`;
+      const htmlOverride = sessionStorage.getItem(draftKey) || '';
+      mod.renderPaper({
+        paperEl: paper,
+        profile,
+        jd: '',
+        mode: 'ats',
+        template: 'classic',
+        scope: [],
+        htmlOverride,
+      });
+    } catch (e) {
+      console.warn('Initial render failed', e);
+    }
+  }
+}
+
+function ensureAiScopeChecklistUI() {
+  const host = document.getElementById('ai-scope-list');
+  if (!host) return;
+  // If already populated by existing logic, do nothing
+  if (host.children && host.children.length) return;
+
+  const defaults = [
+    'Summary',
+    'Technical Skills',
+    'Work Experience',
+    'Projects',
+    'Education',
+    'Certifications',
+    'Achievements',
+    'Character Traits',
+  ];
+
+  host.innerHTML = '';
+  for (const label of defaults) {
+    const row = document.createElement('label');
+    row.style.display = 'flex';
+    row.style.alignItems = 'center';
+    row.style.gap = '10px';
+    row.style.cursor = 'pointer';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = true;
+    cb.dataset.scope = label;
+    cb.style.width = '16px';
+    cb.style.height = '16px';
+
+    const text = document.createElement('span');
+    text.textContent = label;
+
+    row.appendChild(cb);
+    row.appendChild(text);
+    host.appendChild(row);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  setWhoBadge();
+  ensureAiScopeChecklistUI();
+  ensureProfileAndInitialRender();
+});

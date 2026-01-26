@@ -97,6 +97,17 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
     return;
   }
 
+  // Defensive defaults (prevents blank preview if profile is missing some fields)
+  profile = (profile && typeof profile === 'object') ? profile : {};
+  if (!Array.isArray(profile.customSections)) profile.customSections = [];
+  if (!Array.isArray(profile.skills)) {
+    if (typeof profile.skills === 'string') {
+      profile.skills = profile.skills.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+    } else {
+      profile.skills = [];
+    }
+  }
+
   const summaryText = (profile.summary || "").trim();
   const skills = Array.isArray(profile.skills) ? profile.skills : [];
   const college = (profile.college || "").trim();
