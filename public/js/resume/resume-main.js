@@ -1,6 +1,12 @@
 import { renderPaper } from "./resume-render.js";
 import * as History from "./history-manager.js";
 
+// Provide a safe selector helper if the file expects `$`.
+// Do NOT redeclare if another `$` already exists.
+if (typeof window.$ !== 'function') {
+  window.$ = (sel) => document.querySelector(sel);
+}
+
 function setStatus(msg, kind = "") {
   const s = $("status");
   if (!s) return;
