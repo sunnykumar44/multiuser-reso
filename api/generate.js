@@ -295,6 +295,24 @@ const RESUME_CSS = `
       border: 1px solid #cbd5e1; border-radius: 4px; background-color: #f8fafc;
       font-size: 10px; font-weight: 600; color: #334155;
     }
+
+    /* Mobile / small screens: prevent overlap and force wrapping */
+    @media (max-width: 520px) {
+      .generated-resume { padding: 14px; }
+      .resume-name { font-size: 22px; }
+      .resume-contact { font-size: 10px; line-height: 1.35; }
+      .resume-section-title { font-size: 12px; margin: 14px 0 8px; }
+      .resume-item, .generated-resume p, .generated-resume li { font-size: 10.5px; }
+
+      .resume-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+      }
+      .resume-date { font-size: 10px; }
+      .resume-role { word-break: break-word; }
+      .skill-tag { font-size: 9.5px; padding: 3px 7px; }
+    }
   </style>
 `;
 
