@@ -1,10 +1,19 @@
 import { renderPaper } from "./resume-render.js";
 import * as History from "./history-manager.js";
 
-// Provide a safe selector helper if the file expects `$`.
-// Do NOT redeclare if another `$` already exists.
+// Provide a safe selector helper compatible with existing code in this file:
+// - $("id") returns element by id (used widely here)
+// - $("#css") works too
 if (typeof window.$ !== 'function') {
-  window.$ = (sel) => document.querySelector(sel);
+  window.$ = (sel) => {
+    if (typeof sel !== 'string') return null;
+    const s = sel.trim();
+    if (!s) return null;
+    if (s.startsWith('#') || s.startsWith('.') || s.includes(' ') || s.includes('[') || s.includes('>')) {
+      return document.querySelector(s);
+    }
+    return document.getElementById(s);
+  };
 }
 
 function setStatus(msg, kind = "") {
@@ -685,8 +694,11 @@ if (btnAddAiSection) {
   });
 }
 
+// Remove legacy draft-only Generate handler (it conflicts with the server Generate wiring below).
+// The server Generate wiring will handle draft persistence + rendering.
+
 // --------------------
-// Generate (no AI calls yet, just draft creation)
+// Generate (server integration)
 // --------------------
 const btnGen = $("btnGen");
 if (btnGen) {
@@ -751,6 +763,10 @@ async function callGenerateAPI(payload) {
   const btn = $('btnGen');
   if (!btn) return;
 
+  // Prevent double-binding if this module is evaluated twice.
+  if (btn.__serverGenWired) return;
+  btn.__serverGenWired = true;
+
   btn.addEventListener('click', async (e) => {
     try {
       e.preventDefault();
@@ -758,7 +774,6 @@ async function callGenerateAPI(payload) {
       const mode = getActive('modes', 'data-mode') || 'ats';
       const template = getActive('templates', 'data-template') || 'classic';
       const scope = typeof getScopeFromUI === 'function' ? getScopeFromUI() : [];
-      const profile = rawProfile ? safeParseJSON(rawProfile, null) : null;
 
       // Read latest unlockedProfile from sessionStorage at click time
       const rawNow = sessionStorage.getItem('unlockedProfile');
@@ -786,69 +801,32 @@ async function callGenerateAPI(payload) {
 
       // Support multiple server response shapes: { generated: { html } }, { resume }, or legacy
       let serverHtml = null;
-      let serverText = null;
       try {
         if (!result) throw new Error('Empty server response');
-        if (result.generated && result.generated.html) {
-          serverHtml = result.generated.html;
-          serverText = result.generated.text || '';
-        } else if (result.resume) {
-          serverHtml = result.resume;
-          serverText = result.text || '';
-        } else if (result.html) {
-          serverHtml = result.html;
-          serverText = result.text || '';
-        } else if (result.generatedHtml) {
-          serverHtml = result.generatedHtml;
-        } else if (result.page) {
-          serverHtml = result.page; // some fallbacks used 'page'
-        }
+        if (result.generated && result.generated.html) serverHtml = result.generated.html;
+        else if (result.resume) serverHtml = result.resume;
+        else if (result.html) serverHtml = result.html;
+        else if (result.generatedHtml) serverHtml = result.generatedHtml;
+        else if (result.page) serverHtml = result.page;
       } catch (e) {
         console.warn('Unable to parse server response', e, result);
       }
 
       if (serverHtml) {
-        // Persist returned HTML into draft and render
+        // Persist current UI -> draft settings
+        draft.jd = jdNow;
+        draft.mode = mode;
+        draft.template = template;
+        draft.scope = scope;
+
         draft.htmlOverride = String(serverHtml || '');
         saveDraft(draft);
 
-        // Render directly into the preview
         if (paperEl) {
           try {
             paperEl.innerHTML = draft.htmlOverride;
-            // make editable
-            paperEl.querySelectorAll('p, li, div, span, h1, h2, h3').forEach(el => { el.contentEditable = true; });
-
-            // Lock static profile header and contact info so user-provided values remain unchanged
-            try {
-              // If server provided a profile header with class 'profile-header', lock it
-              const headerEl = paperEl.querySelector('.profile-header');
-              if (headerEl) {
-                headerEl.contentEditable = false;
-                headerEl.querySelectorAll('*').forEach(ch => ch.contentEditable = false);
-              }
-
-              // Lock profile-contact block if present
-              const contactEl = paperEl.querySelector('.profile-contact');
-              if (contactEl) {
-                contactEl.contentEditable = false;
-                contactEl.querySelectorAll('*').forEach(ch => ch.contentEditable = false);
-              }
-
-              // Also lock any element whose text matches fullName, email, or phone exactly
-              const lockValues = [currentProfile.fullName, currentProfile.email, currentProfile.phone].filter(Boolean).map(v => String(v).trim());
-              if (lockValues.length) {
-                const allEls = Array.from(paperEl.querySelectorAll('*'));
-                for (const val of lockValues) {
-                  const match = allEls.find(el => el.textContent && el.textContent.trim() === val);
-                  if (match) { match.contentEditable = false; match.querySelectorAll('*').forEach(ch => ch.contentEditable = false); }
-                }
-              }
-            } catch (lockErr) {
-              console.warn('Failed to lock static profile fields', lockErr);
-            }
+            enableInlineEditing(paperEl);
           } catch (e) {
-            // fallback
             paperEl.innerHTML = draft.htmlOverride;
           }
         }
@@ -856,40 +834,17 @@ async function callGenerateAPI(payload) {
         updateEditBadge();
         setStatus('Generated (server)', 'ok');
         showToast('Generated', 'success', 1600);
-
-        if (typeof History !== 'undefined' && History.addHistoryItem) {
-          try {
-            History.addHistoryItem({
-              id: result.id || Date.now(),
-              nickname: effectiveNickname,
-              date: new Date().toISOString(),
-              jdPreview: jdNow.slice(0, 140),
-              mode,
-              template,
-              htmlSnapshot: serverHtml,
-            });
-            if (History.render) History.render();
-          } catch (hErr) { console.warn('history add failed', hErr); }
-        }
       } else {
-        // No usable server HTML — log and fall back to client-side builder
-        console.warn('Server returned no HTML. Response:', result);
+        // fallback
         setStatus('Server returned no usable HTML; using local fallback', 'err');
         showToast('Using local fallback', 'warn');
 
-        try {
-          const fallbackHtml = clientBuildFallback(currentProfile, jdNow, mode, template, scope, effectiveNickname);
-          draft.htmlOverride = fallbackHtml;
-          saveDraft(draft);
-          if (paperEl) paperEl.innerHTML = draft.htmlOverride;
-          // make editable
-          if (paperEl) paperEl.querySelectorAll('p, li, div, span, h1, h2, h3').forEach(el => { el.contentEditable = true; });
-          updateEditBadge();
-        } catch (fbErr) {
-          console.error('Fallback render failed', fbErr);
-          setStatus('Failed to render resume', 'err');
-          showToast('Render failed', 'err');
-        }
+        const fallbackHtml = clientBuildFallback(currentProfile, jdNow, mode, template, scope, effectiveNickname);
+        draft.htmlOverride = fallbackHtml;
+        saveDraft(draft);
+        if (paperEl) paperEl.innerHTML = draft.htmlOverride;
+        enableInlineEditing(paperEl);
+        updateEditBadge();
       }
     } catch (err) {
       console.error('Generate click error:', err);
