@@ -111,18 +111,41 @@ function makeUserCard(nickname) {
   return li;
 }
 
+let __usersFetchController = null;
+let __usersFetchPromise = null;
 async function fetchUsersFromServer() {
-  try {
-    const resp = await fetch('/api/users?limit=50', { cache: 'no-store' });
-    if (!resp.ok) return [];
-    const j = await resp.json();
-    const users = Array.isArray(j?.users) ? j.users : [];
-    return users
-      .map(u => ({ nickname: String(u.nickname || '').trim().toLowerCase(), updatedAt: String(u.updatedAt || ''), lastTitle: String(u.lastTitle || '') }))
-      .filter(u => u.nickname);
-  } catch {
-    return [];
-  }
+  // If a request is already in-flight, reuse it (prevents duplicate calls)
+  if (__usersFetchPromise) return __usersFetchPromise;
+
+  // Abort any previous request
+  try { if (__usersFetchController) __usersFetchController.abort(); } catch (_) {}
+  __usersFetchController = new AbortController();
+
+  __usersFetchPromise = (async () => {
+    try {
+      const resp = await fetch('/api/users?limit=50', {
+        cache: 'no-store',
+        signal: __usersFetchController.signal,
+      });
+      if (!resp.ok) return [];
+      const j = await resp.json();
+      const users = Array.isArray(j && j.users) ? j.users : [];
+      return users
+        .map(u => ({
+          nickname: String(u && u.nickname ? u.nickname : '').trim().toLowerCase(),
+          updatedAt: String(u && u.updatedAt ? u.updatedAt : ''),
+          lastTitle: String(u && u.lastTitle ? u.lastTitle : ''),
+        }))
+        .filter(u => u.nickname);
+    } catch (e) {
+      // Abort is expected when navigating quickly
+      return [];
+    } finally {
+      __usersFetchPromise = null;
+    }
+  })();
+
+  return __usersFetchPromise;
 }
 
 function fmtWhenFromServer(u) {
