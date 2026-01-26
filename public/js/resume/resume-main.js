@@ -1107,41 +1107,50 @@ function renderHistoryList(items) {
     row.addEventListener('click', () => {
       // Load HTML into preview
       const paper = document.getElementById('paper');
-      if (paper) paper.innerHTML = String(it.html || '');
-      // Save as draft so edits persist
-      try {
-        const nick = normalizeNickname(sessionStorage.getItem('unlockedNickname') || '');
-        if (nick) sessionStorage.setItem(`resumeDraft:${nick}`, String(it.html || ''));
-      } catch (_) {}
+      const html = String(it.html || '');
+      if (paper) {
+        paper.innerHTML = html;
+        enableInlineEditing(paper);
+      }
+      applyHistoryHtmlToDraft(html);
     });
     host.appendChild(row);
   }
 }
 
+// Save a history HTML item into draft.json format (prevents raw HTML breaking loadDraft)
+function applyHistoryHtmlToDraft(html) {
+  const d = ensureDraft();
+  d.htmlOverride = String(html || '');
+  saveDraft(d);
+  updateEditBadge();
+}
+
+// Single Recent Resumes wire-up (server history API)
 async function wireRecentResumes() {
-   const btn = document.getElementById('btnToggleHistory');
-   const container = document.getElementById('history-container');
-   if (!btn || !container) return;
+  const btn = document.getElementById('btnToggleHistory');
+  const container = document.getElementById('history-container');
+  if (!btn || !container) return;
 
-   if (btn.__wiredHistory) return;
-   btn.__wiredHistory = true;
+  if (btn.__wiredHistory) return;
+  btn.__wiredHistory = true;
 
-   btn.addEventListener('click', async () => {
-     const isOpen = container.style.display !== 'none' && container.style.display !== '';
-     if (isOpen) {
-       container.style.display = 'none';
-       return;
-     }
+  btn.addEventListener('click', async () => {
+    const isOpen = container.style.display !== 'none' && container.style.display !== '';
+    if (isOpen) {
+      container.style.display = 'none';
+      return;
+    }
 
-     container.style.display = 'block';
-     const status = document.getElementById('status');
-     if (status) status.textContent = 'Loading recent resumes…';
-     const nick = normalizeNickname(sessionStorage.getItem('unlockedNickname') || '');
-     const items = await fetchHistory(nick, 10);
-     renderHistoryList(items);
-     if (status) status.textContent = '';
-   });
- }
+    container.style.display = 'block';
+    const status = document.getElementById('status');
+    if (status) status.textContent = 'Loading recent resumes…';
+    const nick = normalizeNickname(sessionStorage.getItem('unlockedNickname') || '');
+    const items = await fetchHistory(nick, 10);
+    renderHistoryList(items);
+    if (status) status.textContent = '';
+  });
+}
 
 // Wire after DOM
 document.addEventListener('DOMContentLoaded', wireRecentResumes);
