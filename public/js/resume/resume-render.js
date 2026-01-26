@@ -254,7 +254,7 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
             ${hasText(college) ? `<div style="font-weight:800;">${college}</div>` : ''}
             ${hasText(branch) ? `<div class="muted">${branch}</div>` : ''}
           </div>
-          <div class="muted" style="white-space:nowrap; align-self:flex-start;">${eduYears}</div>
+          <div class="muted" style="white-space:nowrap; align-self:flex-start; font-weight:800;">${eduYears}</div>
         </div>
       </div>
     ` : ""}
