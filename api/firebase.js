@@ -73,8 +73,44 @@ async function listUsers({ limit = 50 } = {}) {
   return out.slice(0, limit);
 }
 
+function normalizeNickname(n) {
+  return String(n || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-_]/g, '');
+}
+
+async function saveEncryptedProfile({ nickname, blob, createdAt } = {}) {
+  const db = initAdmin();
+  const n = normalizeNickname(nickname);
+  if (!n) throw new Error('Missing nickname');
+  if (!blob || typeof blob !== 'object') throw new Error('Missing encrypted blob');
+  const nowIso = new Date().toISOString();
+  const updatedAt = createdAt || nowIso;
+  await db.collection('profiles').doc(n).set({
+    nickname: n,
+    blob,
+    updatedAt,
+  }, { merge: true });
+  // Keep users index fresh
+  await db.collection('users').doc(n).set({ nickname: n, updatedAt }, { merge: true });
+  return { nickname: n, updatedAt };
+}
+
+async function getEncryptedProfile({ nickname } = {}) {
+  const db = initAdmin();
+  const n = normalizeNickname(nickname);
+  if (!n) throw new Error('Missing nickname');
+  const doc = await db.collection('profiles').doc(n).get();
+  if (!doc.exists) return null;
+  const d = doc.data() || {};
+  if (!d.blob) return null;
+  return { nickname: n, blob: d.blob, updatedAt: d.updatedAt || '' };
+}
+
 function initDb() {
   return initAdmin();
 }
 
-module.exports = { saveHistory, listUsers, initDb };
+module.exports = { saveHistory, listUsers, saveEncryptedProfile, getEncryptedProfile, initDb };

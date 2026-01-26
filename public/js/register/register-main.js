@@ -282,6 +282,18 @@ form.addEventListener("submit", async (e) => {
     const blob = await encryptJSON({ pin, data: profile });
     localStorage.setItem(getKey(nickname), JSON.stringify(blob));
 
+    // Cloud sync (encrypted blob only)
+    try {
+      await fetch('/api/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname, blob, createdAt: new Date().toISOString() }),
+      });
+    } catch (e) {
+      // Non-fatal: local save still succeeded
+      console.warn('Cloud sync failed (still saved locally)', e);
+    }
+
     // Keep session in sync so resume page can immediately reflect changes
     try {
       const effectiveNickname = nickname || profile.fullName || 'anon';

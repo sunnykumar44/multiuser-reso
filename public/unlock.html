@@ -165,15 +165,24 @@
         if (!nickname) throw new Error("Missing nickname");
         if (!/^\d{6}$/.test(pin)) throw new Error("PIN must be exactly 6 digits");
 
-        const raw = localStorage.getItem(getKey(nickname));
-        if (!raw) throw new Error(`No local profile found for "${nickname}"`);
-
-        const blob = JSON.parse(raw);
+        let raw = localStorage.getItem(getKey(nickname));
+        let blob = null;
+        if (raw) {
+          blob = JSON.parse(raw);
+        } else {
+          // Fetch encrypted blob from cloud (still needs PIN to decrypt locally)
+          setStatus('No local profile found. Fetching encrypted profile from cloud...', 'ok');
+          const resp = await fetch(`./api/profile?nickname=${encodeURIComponent(nickname)}`, { cache: 'no-store' });
+          if (!resp.ok) throw new Error(`No local profile found for "${nickname}" (and not found in cloud)`);
+          const j = await resp.json();
+          if (!j || !j.ok || !j.blob) throw new Error('Cloud profile response invalid');
+          blob = j.blob;
+          // Save locally for next time
+          localStorage.setItem(getKey(nickname), JSON.stringify(blob));
+        }
 
         // Decrypt locally
         const profile = await decryptJSON({ pin, blob });
-
-  // unlocked profile available for debugging
 
         // Store decrypted profile only in sessionStorage (temporary, tab-only)
         sessionStorage.setItem("unlockedProfile", JSON.stringify(profile));
@@ -220,6 +229,3 @@
 </html>
 
 
-
-
-//python3 -m http.server 3000
