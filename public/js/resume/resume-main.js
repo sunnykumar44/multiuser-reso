@@ -293,30 +293,14 @@ function saveDraft(draft) {
   }
 }
 
-function updateEditBadge() {
-  const badge = $("editBadge");
-  if (!badge) return;
-  const present = draft && typeof draft.htmlOverride === "string" && draft.htmlOverride.trim().length > 0;
-  badge.style.display = present ? "inline-block" : "none";
-  // show undo only if there is a saved edit and we have something to undo
-  showUndoButton(present && !!lastSavedHtmlOverride);
+// Timestamp helper used by saveDraft()
+function nowISO() {
+  try {
+    return new Date().toISOString();
+  } catch (_) {
+    return String(Date.now());
+  }
 }
-
-// Undo buffer for last saved htmlOverride (one-step undo)
-let lastSavedHtmlOverride = null;
-function showUndoButton(show) {
-  const btn = $("btnUndoEdits");
-  if (!btn) return;
-  btn.style.display = show ? "inline-block" : "none";
-}
-
-// In-memory pending edits (autosave writes here; Save persists to draft.htmlOverride)
-let pendingHtmlOverride = null;
-// Timestamp until which autosave should be ignored (ms since epoch)
-let ignoreAutosaveUntil = 0;
-
-let draft = loadDraft();
-updateEditBadge();
 
 // --------------------
 // AI Scope list (dynamic)
