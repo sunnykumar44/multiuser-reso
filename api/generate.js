@@ -23,7 +23,9 @@ function consumeOne(userKey) {
     state.byUser = new Map();
   }
   const used = Number(state.byUser.get(userKey) || 0);
-  if (used >= DAILY_LIMIT) return { ok: false, remaining: 0, used, limit: DAILY_LIMIT, date: state.date };
+  if (used >= DAILY_LIMIT) {
+    return { ok: false, remaining: 0, used, limit: DAILY_LIMIT, date: state.date, error: 'Daily limit reached' };
+  }
   state.byUser.set(userKey, used + 1);
   return { ok: true, remaining: DAILY_LIMIT - (used + 1), used: used + 1, limit: DAILY_LIMIT, date: state.date };
 }
@@ -32,7 +34,8 @@ function getRemaining(userKey) {
   const state = globalThis.__DAILY_LIMIT_STATE__;
   const d = todayUtc();
   if (state.date !== d) {
-    return { remaining: DAILY_LIMIT, used: 0, limit: DAILY_LIMIT, date: d };
+    state.date = d;
+    state.byUser = new Map();
   }
   const used = Number(state.byUser.get(userKey) || 0);
   return { remaining: Math.max(DAILY_LIMIT - used, 0), used, limit: DAILY_LIMIT, date: state.date };
@@ -41,11 +44,15 @@ function getRemaining(userKey) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function parseRetryDelayMs(txt) {
-  const m = String(txt || '').match(/"retryDelay"\s*:\s*"(\d+)s"/);
-  if (m && m[1]) return Number(m[1]) * 1000;
-  const m2 = String(txt || '').match(/retry in\s+(\d+)/i);
-  if (m2 && m2[1]) return Number(m2[1]) * 1000;
-  return 0;
+  try {
+    const m = String(txt || '').match(/"retryDelay"\s*:\s*"(\d+)s"/);
+    if (m && m[1]) return Number(m[1]) * 1000;
+    const m2 = String(txt || '').match(/retry in\s+(\d+)/i);
+    if (m2 && m2[1]) return Number(m2[1]) * 1000;
+    return 0;
+  } catch (_) {
+    return 0;
+  }
 }
 
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
@@ -243,17 +250,53 @@ function escapeHtml(s = "") {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function canonicalSectionName(name) {
-  const s = String(name || "").trim().toLowerCase();
-  if (s.includes("work") || s.includes("experience")) return "Work Experience"; 
-  if (s.includes("technical") || s.includes("skill")) return "Technical Skills";
-  if (s.includes("summary")) return "Summary";
-  if (s.includes("education")) return "Education";
-  if (s.includes("project")) return "Projects";
-  if (s.includes("trait") || s.includes("character")) return "Character Traits";
-  if (s.includes("cert")) return "Certifications";
-  if (s.includes("achieve")) return "Achievements";
-  return name.trim(); 
+// Ensure Education shows college + branch + edu years from profile even if model omits them
+function ensureEducationInHtml({ html, profile } = {}) {
+  try {
+    const outHtml = String(html || '');
+    const p = (profile && typeof profile === 'object') ? profile : {};
+    const college = String(p.college || '').trim();
+    const branch = String(p.branch || '').trim();
+    const eduFrom = String(p.eduFrom || '').trim();
+    const eduTo = String(p.eduTo || '').trim();
+    const eduYears = [eduFrom, eduTo].filter(Boolean).join('–');
+
+    // If there is no usable education info, do nothing
+    if (!college && !branch && !eduYears) return outHtml;
+
+    // If AI output already contains branch or years, do nothing
+    const lower = outHtml.toLowerCase();
+    const hasBranch = branch && lower.includes(String(branch).toLowerCase());
+    const hasYears = eduYears && lower.includes(String(eduYears).toLowerCase());
+    if (hasBranch || hasYears) return outHtml;
+
+    // If it doesn't even mention Education, do nothing (avoid risky injection)
+    const hasEducationHeading = /education/i.test(outHtml);
+    if (!hasEducationHeading) return outHtml;
+
+    // Build a safe Education block that matches the server template class names
+    const eduLine2 = [branch, eduYears].filter(Boolean).join(' • ');
+    const injected = `
+<div class="resume-item">
+  <div class="resume-row">
+    <span class="resume-role">${escapeHtml(college || 'Education')}</span>
+    <span class="resume-date">${escapeHtml(eduYears || '')}</span>
+  </div>
+  ${branch ? `<span class="resume-company">${escapeHtml(branch)}</span>` : ''}
+</div>
+`;
+
+    // Try to insert right after the Education section title
+    // Pattern: <div class="resume-section-title">Education</div>
+    const re = /(<div\s+class="resume-section-title"[^>]*>\s*Education\s*<\/div>)/i;
+    if (re.test(outHtml)) {
+      return outHtml.replace(re, `$1${injected}`);
+    }
+
+    return outHtml;
+  } catch (_) {
+    return String(html || '');
+  }
 }
 
 // --- CONSTANTS ---
@@ -394,13 +437,13 @@ function normalizeSkillToken(s) {
   // Canonicalize frequent variants
   if (/^etl(\s+processes|\s+principles)?$/.test(t)) return 'ETL';
   if (/^(version\s*control\s*\(git\)|git\s+version\s+control)$/.test(t)) return 'Git';
-  if (/^jupyter(\s+notebooks)?$/.test(t)) return 'Jupyter Notebooks';
+  if (/^jupyter(\s+notebooks)?$/.test(t)) return 'Jupyter';
   if (/^sql$/.test(t)) return 'SQL';
   if (/^(postgresql|postgre\s*sql)$/.test(t)) return 'PostgreSQL';
   if (/^mysql$/.test(t)) return 'MySQL';
   if (/^aws\s*s3$/.test(t)) return 'AWS S3';
   if (/^bigquery$/.test(t)) return 'BigQuery';
-  if (/^power\s*bi$/.test(t)) return 'PowerBI';
+  if (/^power\s*bi$/.test(t)) return 'Power BI';
   if (/^java$/.test(t)) return 'Java';
   if (/^python$/.test(t)) return 'Python';
   if (/^numpy$/.test(t)) return 'NumPy';
@@ -1212,7 +1255,15 @@ OUTPUT: JSON only. No markdown.
       debug.historyError = String(e && e.message ? e.message : e);
     }
 
-    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
+    // Guarantee profile education fields are reflected in HTML if the model omitted them
+    try {
+      const _p = (typeof profile !== 'undefined') ? profile : (req.body && req.body.profile ? req.body.profile : {});
+      if (typeof finalHtml === 'string' && finalHtml.trim()) {
+        finalHtml = ensureEducationInHtml({ html: finalHtml, profile: _p });
+      }
+    } catch (_) {}
+
+    return res.status(200).json({ ok: true, generated: { html: finalHtml }, debug });
 
   } catch (err) {
     return res.status(500).json({ error: err.message });
