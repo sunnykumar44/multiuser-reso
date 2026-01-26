@@ -247,6 +247,17 @@ const rawProfile = sessionStorage.getItem("unlockedProfile");
 const nickname = sessionStorage.getItem("unlockedNickname");
 const paperEl = $("paper");
 
+// Module-scope state (declare once, early)
+let draft = null;
+let pendingHtmlOverride = null;
+let ignoreAutosaveUntil = 0;
+let lastSavedHtmlOverride = null;
+
+// Ensure draft is defined as early as possible (some functions reference it during init)
+// eslint-disable-next-line no-var
+// var draft = (typeof draft !== 'undefined' && draft) ? draft : null;
+
+// DRAFT_KEY is used for both draft and history (legacy)
 const DRAFT_KEY = nickname ? `resumeDraft:${nickname}` : "resumeDraft:anon";
 const HIST_KEY = "resumeHistory";
 
@@ -289,6 +300,22 @@ function loadDraft() {
     console.warn('loadDraft error', e);
     return defaultDraft();
   }
+}
+
+// Ensure draft exists immediately after loadDraft is defined
+draft = loadDraft();
+
+function ensureDraft() {
+  if (!draft) draft = loadDraft();
+  // Ensure shape
+  if (!draft || typeof draft !== 'object') draft = defaultDraft();
+  if (!Array.isArray(draft.scope)) draft.scope = [];
+  if (!Array.isArray(draft.aiOnlySections)) draft.aiOnlySections = [];
+  if (typeof draft.htmlOverride !== 'string') draft.htmlOverride = '';
+  if (!draft.mode) draft.mode = 'ats';
+  if (!draft.template) draft.template = 'classic';
+  if (typeof draft.jd !== 'string') draft.jd = '';
+  return draft;
 }
 
 function saveDraft(draft) {
@@ -414,6 +441,7 @@ function profileHasContentForTitle(title) {
 }
 
 function renderAiScope(profile) {
+  ensureDraft();
   const list = $("ai-scope-list");
   if (!list) return;
   list.innerHTML = "";
@@ -598,6 +626,7 @@ function renderLocked() {
 }
 
 function renderReady(profile) {
+  ensureDraft();
   const who = $("who");
   if (who) who.textContent = `Unlocked as: ${nickname}`;
   setStatus("Ready. Paste a job description and generate.", "ok");
