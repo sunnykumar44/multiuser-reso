@@ -1056,32 +1056,34 @@ function renderHistoryList(items) {
 }
 
 async function wireRecentResumes() {
-  const btn = document.getElementById('btnToggleHistory');
-  const container = document.getElementById('history-container');
-  if (!btn || !container) return;
+   const btn = document.getElementById('btnToggleHistory');
+   const container = document.getElementById('history-container');
+   if (!btn || !container) return;
 
-  if (btn.__wiredHistory) return;
-  btn.__wiredHistory = true;
+   if (btn.__wiredHistory) return;
+   btn.__wiredHistory = true;
 
-  btn.addEventListener('click', async () => {
-    const isOpen = container.style.display !== 'none' && container.style.display !== '';
-    if (isOpen) {
-      container.style.display = 'none';
-      return;
-    }
+   btn.addEventListener('click', async () => {
+     const isOpen = container.style.display !== 'none' && container.style.display !== '';
+     if (isOpen) {
+       container.style.display = 'none';
+       return;
+     }
 
-    container.style.display = 'block';
-    const status = document.getElementById('status');
-    if (status) status.textContent = 'Loading recent resumes…';
-    const nick = normalizeNickname(sessionStorage.getItem('unlockedNickname') || '');
-    const items = await fetchHistory(nick, 10);
-    renderHistoryList(items);
-    if (status) status.textContent = '';
-  });
-}
+     container.style.display = 'block';
+     const status = document.getElementById('status');
+     if (status) status.textContent = 'Loading recent resumes…';
+     const nick = normalizeNickname(sessionStorage.getItem('unlockedNickname') || '');
+     const items = await fetchHistory(nick, 10);
+     renderHistoryList(items);
+     if (status) status.textContent = '';
+   });
+ }
 
 // Wire after DOM
 document.addEventListener('DOMContentLoaded', wireRecentResumes);
+
+// NOTE: Do not declare $qs/$id helpers again below; they are defined at top.
 
 function setWhoBadge() {
   const el = document.getElementById('who');
