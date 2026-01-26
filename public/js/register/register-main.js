@@ -135,6 +135,9 @@ window.addEventListener("DOMContentLoaded", () => {
       setValue("nickname", profile.nickname || "");
       setValue("fullName", profile.fullName || "");
       setValue("college", profile.college || "");
+      setValue("branch", profile.branch || "");
+      setValue("eduFrom", profile.eduFrom || "");
+      setValue("eduTo", profile.eduTo || "");
       
       // --- Load Summary & Skills ---
       setValue("summary", profile.summary || "");
@@ -257,6 +260,9 @@ form.addEventListener("submit", async (e) => {
       summary,
       skills,
       college: ($("college").value || "").trim(),
+      branch: ($("branch").value || "").trim(),
+      eduFrom: ($("eduFrom").value || "").trim(),
+      eduTo: ($("eduTo").value || "").trim(),
       
       phone: phoneRaw,
       email: emailRaw,

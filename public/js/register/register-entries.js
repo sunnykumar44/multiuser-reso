@@ -37,18 +37,33 @@ export function createEntriesSectionUI({ entries = [] }) {
   const addBtn = el("button", { type: "button", class: "ghost cs-add-entry" }, ["+ Add Entry (Role/Project)"]);
   
   // Logic to add a single entry row
-  function addEntryUI(initialData = { key: "", bullets: [] }) {
+  function addEntryUI(initialData = { key: "", date: "", bullets: [] }) {
     const row = el("div", { class: "cs-entry" });
 
-    // Key Input (Role, Date, Project Name)
-    const keyInput = el("input", { 
-      class: "cs-entry-key", 
-      placeholder: "Role & Date (e.g. 'Senior Dev | 2023-Present')", 
-      value: initialData.key || "" 
+    // Two-column row: Left = Role/Project, Right = Year/Date
+    const topRow = el('div', { class: 'cs-entry-top' });
+    topRow.style.display = 'grid';
+    topRow.style.gridTemplateColumns = '1fr 160px';
+    topRow.style.gap = '8px';
+    topRow.style.alignItems = 'center';
+
+    const keyInput = el("input", {
+      class: "cs-entry-key",
+      placeholder: "Role / Project (e.g. Data Analyst)",
+      value: initialData.key || ""
     });
-    keyInput.style.width = "100%";
-    keyInput.style.marginBottom = "6px";
-    keyInput.style.fontWeight = "700";
+    keyInput.style.width = '100%';
+    keyInput.style.fontWeight = '700';
+
+    const dateInput = el('input', {
+      class: 'cs-entry-date',
+      placeholder: 'Year / Date (e.g. 2024)',
+      value: initialData.date || ''
+    });
+    dateInput.style.width = '100%';
+
+    topRow.appendChild(keyInput);
+    topRow.appendChild(dateInput);
 
     // Bullets Textarea
     const bulletsInput = el("textarea", { 
@@ -63,7 +78,7 @@ export function createEntriesSectionUI({ entries = [] }) {
     const delBtn = el("button", { type: "button", class: "ghost cs-entry-remove" }, ["Remove Entry"]);
     delBtn.onclick = () => row.remove();
 
-    row.appendChild(keyInput);
+    row.appendChild(topRow);
     row.appendChild(bulletsInput);
     row.appendChild(delBtn);
     list.appendChild(row);
@@ -93,11 +108,12 @@ export function readEntriesSectionUI(container) {
   
   const entries = rows.map(row => {
     const key = (row.querySelector(".cs-entry-key")?.value || "").trim();
+    const date = (row.querySelector('.cs-entry-date')?.value || '').trim();
     const bulletsRaw = (row.querySelector(".cs-entry-bullets")?.value || "");
     const bullets = bulletsRaw.split("\n").map(s => s.trim()).filter(Boolean);
 
     if (!key && bullets.length === 0) return null;
-    return { key, bullets };
+    return { key, date, bullets };
   }).filter(Boolean);
 
   return entries;

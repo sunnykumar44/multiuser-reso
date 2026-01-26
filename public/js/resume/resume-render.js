@@ -111,6 +111,10 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
   const summaryText = (profile.summary || "").trim();
   const skills = Array.isArray(profile.skills) ? profile.skills : [];
   const college = (profile.college || "").trim();
+  const branch = (profile.branch || "").trim();
+  const eduFrom = (profile.eduFrom || "").trim();
+  const eduTo = (profile.eduTo || "").trim();
+  const eduYears = [eduFrom, eduTo].filter(Boolean).join("–");
 
   const sectionsRaw = Array.isArray(profile.customSections) ? profile.customSections : [];
   const headerLinks = getHeaderLinks(sectionsRaw);
@@ -165,10 +169,16 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
       : list
           .map((e) => {
             const key = String(e.key || "").trim().replace(/[“”"]/g, "");
+            const date = String(e.date || "").trim();
             const b = Array.isArray(e.bullets) ? e.bullets : [];
             if (!key && !hasArr(b)) return "";
             return `
-              ${key ? `<div class="r-text" style="font-weight:800;margin-top:6px;" ${EDIT_ATTRS}>${key}</div>` : ""}
+              ${key ? `
+                <div class="r-text" style="font-weight:800;margin-top:6px; display:flex; justify-content:space-between; gap:10px;" ${EDIT_ATTRS}>
+                  <span>${key}</span>
+                  <span class="muted" style="white-space:nowrap;">${date}</span>
+                </div>
+              ` : ""}
               ${hasArr(b) ? `<ul class="r-bullets">${b.map((x) => `<li ${EDIT_ATTRS}>${x}</li>`).join("")}</ul>` : ""}
             `;
           })
@@ -236,10 +246,13 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
       </div>
     ` : ""}
 
-    ${hasText(college) ? `
+    ${(hasText(college) || hasText(branch) || hasText(eduYears)) ? `
       <div class="r-section">
         <div class="r-title">Education</div>
-        <div class="r-text" ${EDIT_ATTRS}>${college}</div>
+        <div class="r-text" style="display:flex; justify-content:space-between; gap:10px;" ${EDIT_ATTRS}>
+          <span>${[college, branch].filter(Boolean).join(" — ")}</span>
+          <span class="muted" style="white-space:nowrap;">${eduYears}</span>
+        </div>
       </div>
     ` : ""}
 

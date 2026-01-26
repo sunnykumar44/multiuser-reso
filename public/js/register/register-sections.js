@@ -360,7 +360,8 @@ export function getHeaderLinks(customSections) {
     for (const it of (sec.items || [])) {
       const label = String(it?.label || "").trim();
       const url = String(it?.url || "").trim();
-      if (label && url) links.push({ label, url });
+      if (!label || !url) continue;
+      links.push({ label, url });
     }
   }
   return links;
