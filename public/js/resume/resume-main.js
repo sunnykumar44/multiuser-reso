@@ -991,7 +991,7 @@ function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,
 })();
 
 // history-manager wiring (recent resumes)
-function $qs(sel) { return document.querySelector(sel); }
+// (selector helper already defined at top)
 
 function normalizeNickname(n) {
   return String(n || '')
