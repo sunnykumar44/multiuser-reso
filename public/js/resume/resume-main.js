@@ -1,5 +1,13 @@
+// public/js/resume/resume-main.js
 import { renderPaper } from "./resume-render.js";
 import * as History from "./history-manager.js";
+
+// Helper to get current time in ISO format (must exist before saveDraft is ever called)
+// Use guarded assignment so we don't redeclare if it already exists later in the file.
+// eslint-disable-next-line no-var
+var nowISO = (typeof nowISO === 'function') ? nowISO : (() => {
+  try { return new Date().toISOString(); } catch { return String(Date.now()); }
+});
 
 // ----- bootstrap fallbacks (must be top-of-file) -----
 // Some hosted builds evaluated loadDraft before helper definitions; keep these at the very top.
@@ -290,15 +298,6 @@ function saveDraft(draft) {
     sessionStorage.setItem(key, JSON.stringify(draft));
   } catch (e) {
     console.warn('saveDraft error', e);
-  }
-}
-
-// Timestamp helper used by saveDraft()
-function nowISO() {
-  try {
-    return new Date().toISOString();
-  } catch (_) {
-    return String(Date.now());
   }
 }
 
