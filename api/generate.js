@@ -1169,7 +1169,7 @@ OUTPUT: JSON only. No markdown.
     
     // Save to history only if we have a meaningful title (prevents blank "name:" items)
     try {
-      const historyTitle = buildHistoryTitle({ nickname, profile, jd, finalJD });
+      const historyTitle = buildHistoryTitle({ nickname, profile, jd: jdNormalized, finalJD });
       if (historyTitle) {
         await saveHistory({
           nickname: nickname || profile?.fullName || 'anonymous',
@@ -1179,8 +1179,15 @@ OUTPUT: JSON only. No markdown.
           html: htmlSkeleton,
           createdAt: new Date().toISOString(),
         });
+        debug.historySaved = true;
+      } else {
+        debug.historySaved = false;
+        debug.historySkipReason = 'empty-title';
       }
-    } catch (_) {}
+    } catch (e) {
+      debug.historySaved = false;
+      debug.historyError = String(e && e.message ? e.message : e);
+    }
 
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
