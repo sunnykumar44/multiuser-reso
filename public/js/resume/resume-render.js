@@ -176,7 +176,8 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
               const s = String(x || '').trim();
               if (!key || !s) return s;
               const k = String(key).trim();
-              const re = new RegExp('^' + k.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&') + '\\s*[\u2013\u2014\-:]\\s*', 'i');
+              // Note: keep '-' last in the character class to avoid "Range out of order" in some browsers.
+              const re = new RegExp('^' + k.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&') + '\\s*[\u2013\u2014: -]\\s*', 'i');
               const stripped = s.replace(re, '').trim();
               return ensureWordRange(stripped, 27, 32);
              });
