@@ -1,9 +1,52 @@
 import { renderPaper } from "./resume-render.js";
 import * as History from "./history-manager.js";
 
+// ----- bootstrap fallbacks (must be top-of-file) -----
+// Some hosted builds evaluated loadDraft before helper definitions; keep these at the very top.
+const __safeParseJSON = (raw, fallback = null) => {
+  try {
+    if (raw == null) return fallback;
+    if (typeof raw !== 'string') return raw;
+    return JSON.parse(raw);
+  } catch (_) {
+    return fallback;
+  }
+};
+
+const __defaultDraft = () => ({
+  schema: 'resume_draft_v1',
+  jd: '',
+  mode: 'ats',
+  template: 'classic',
+  scope: [],
+  aiOnlySections: [],
+  htmlOverride: '',
+});
+
+// Public API for safe JSON parsing (overrides bootstrap fallback if present)
+function safeParseJSON(raw, fallback) {
+  try { return JSON.parse(raw); } catch { return fallback; }
+}
+
+// Public API for default draft object (overrides bootstrap fallback if present)
+function defaultDraft() {
+  return {
+    schema: 'resume_draft_v1',
+    jd: '',
+    mode: 'ats',
+    template: 'classic',
+    scope: [],
+    aiOnlySections: [],
+    htmlOverride: '',
+  };
+}
+
 // Local selector helpers (avoid clobbering libraries like jQuery on hosted builds)
-const $id = (id) => document.getElementById(id);
-const $qs = (sel) => document.querySelector(sel);
+// Use guarded `var` to tolerate accidental duplicate injection in this file.
+// eslint-disable-next-line no-var
+var $id = (typeof $id === 'function') ? $id : ((id) => document.getElementById(id));
+// eslint-disable-next-line no-var
+var $qs = (typeof $qs === 'function') ? $qs : ((sel) => document.querySelector(sel));
 // Back-compat: some older functions in this file expect `$()`.
 // Keep it local to this module unless not present.
 if (typeof window.$ !== 'function') {
@@ -1040,10 +1083,6 @@ async function wireRecentResumes() {
 // Wire after DOM
 document.addEventListener('DOMContentLoaded', wireRecentResumes);
 
-function safeParseJson(raw, fallback) {
-  try { return JSON.parse(raw); } catch { return fallback; }
-}
-
 function setWhoBadge() {
   const el = document.getElementById('who');
   if (!el) return;
@@ -1061,7 +1100,7 @@ async function ensureProfileAndInitialRender() {
   if (!paper) return;
 
   const raw = sessionStorage.getItem('unlockedProfile');
-  const profile = raw ? safeParseJson(raw, null) : null;
+  const profile = raw ? safeParseJSON(raw, null) : null;
   if (!profile || typeof profile !== 'object') {
     // No unlocked session -> send to lobby
     const status = document.getElementById('status');
