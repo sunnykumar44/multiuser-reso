@@ -1007,3 +1007,95 @@ function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,
   withButtonFeedback(btnClearDraft, async () => { clearDraftAll(); }, { busyText: 'Clearing…' });
   withButtonFeedback(btnLogout, async () => { lockSession(); }, { busyText: 'Locking…' });
 })();
+
+function $(sel) { return document.querySelector(sel); }
+
+function normalizeNickname(n) {
+  return String(n || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-_]/g, '');
+}
+
+function formatDate(iso) {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso || '';
+    const pad = (x) => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch { return iso || ''; }
+}
+
+async function fetchHistory(nickname, limit = 20) {
+  const n = normalizeNickname(nickname);
+  if (!n) return [];
+  const resp = await fetch(`/api/history?nickname=${encodeURIComponent(n)}&limit=${encodeURIComponent(String(limit))}`, { cache: 'no-store' });
+  if (!resp.ok) return [];
+  const j = await resp.json().catch(() => null);
+  return Array.isArray(j && j.items) ? j.items : [];
+}
+
+function renderHistoryList(items) {
+  const host = document.getElementById('history-list');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!items || !items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'note small';
+    empty.textContent = 'No history yet. Generate once to see recent resumes here.';
+    host.appendChild(empty);
+    return;
+  }
+
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = 'hist-item';
+    const left = document.createElement('div');
+    left.textContent = String(it.title || '(untitled)');
+    const right = document.createElement('div');
+    right.className = 'hist-date';
+    right.textContent = formatDate(it.createdAt);
+    row.appendChild(left);
+    row.appendChild(right);
+    row.addEventListener('click', () => {
+      // Load HTML into preview
+      const paper = document.getElementById('paper');
+      if (paper) paper.innerHTML = String(it.html || '');
+      // Save as draft so edits persist
+      try {
+        const nick = normalizeNickname(sessionStorage.getItem('unlockedNickname') || '');
+        if (nick) sessionStorage.setItem(`resumeDraft:${nick}`, String(it.html || ''));
+      } catch (_) {}
+    });
+    host.appendChild(row);
+  }
+}
+
+async function wireRecentResumes() {
+  const btn = document.getElementById('btnToggleHistory');
+  const container = document.getElementById('history-container');
+  if (!btn || !container) return;
+
+  if (btn.__wiredHistory) return;
+  btn.__wiredHistory = true;
+
+  btn.addEventListener('click', async () => {
+    const isOpen = container.style.display !== 'none' && container.style.display !== '';
+    if (isOpen) {
+      container.style.display = 'none';
+      return;
+    }
+
+    container.style.display = 'block';
+    const status = document.getElementById('status');
+    if (status) status.textContent = 'Loading recent resumes…';
+    const nick = normalizeNickname(sessionStorage.getItem('unlockedNickname') || '');
+    const items = await fetchHistory(nick, 20);
+    renderHistoryList(items);
+    if (status) status.textContent = '';
+  });
+}
+
+// Wire after DOM
+document.addEventListener('DOMContentLoaded', wireRecentResumes);
