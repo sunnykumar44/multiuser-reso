@@ -273,6 +273,9 @@ function updateEditBadge() {
   } catch (_) {}
 }
 
+// Ensure these helpers are available on window for non-module callers
+try { window.updateEditBadge = updateEditBadge; window.showUndoButton = showUndoButton; } catch (_) {}
+
 // Ensure draft is defined as early as possible (some functions reference it during init)
 // eslint-disable-next-line no-var
 // var draft = (typeof draft !== 'undefined' && draft) ? draft : null;
