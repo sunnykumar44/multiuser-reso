@@ -2,6 +2,11 @@ function downloadPdfFromPreview() {
   // ...existing code...
 }
 
+// Provide a safe selector helper if this file expects `$`.
+// Do NOT redeclare if another `$` already exists.
+if (typeof window !== 'undefined' && typeof window.$ !== 'function') {
+  window.$ = (sel) => document.querySelector(sel);
+}
 // Global print CSS: only print the resume, hide full app UI
 (function ensurePrintOnlyResumeCss() {
   const id = 'print-only-resume-css';
