@@ -752,6 +752,22 @@ function inferRoleFromProfile(profile = {}) {
   return 'software engineer';
 }
 
+// Helper to normalize arbitrary section titles into canonical buckets (hoisted function)
+function canonicalSectionName(name) {
+  const s = String(name || '').trim().toLowerCase();
+  if (!s) return '';
+  if (s.includes('work') || s.includes('experience') || s.includes('employment')) return 'Work Experience';
+  if (s.includes('project')) return 'Projects';
+  if (s.includes('technical') || s.includes('skill')) return 'Technical Skills';
+  if (s.includes('summary')) return 'Summary';
+  if (s.includes('education') || s.includes('college') || s.includes('degree')) return 'Education';
+  if (s.includes('cert') || s.includes('certificate')) return 'Certifications';
+  if (s.includes('achieve') || s.includes('award')) return 'Achievements';
+  if (s.includes('trait') || s.includes('character') || s.includes('soft')) return 'Character Traits';
+  // default: title-case the input for display
+  return String(name || '').trim().replace(/\s+/g, ' ').replace(/(^|\s)\S/g, l => l.toUpperCase());
+};
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
