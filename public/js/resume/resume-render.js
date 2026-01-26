@@ -175,11 +175,8 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
             const b = b0.map((x) => {
               const s = String(x || '').trim();
               if (!key || !s) return s;
-              const k = String(key).trim();
-              // Note: keep '-' last in the character class to avoid "Range out of order" in some browsers.
-              const re = new RegExp('^' + k.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&') + '\\s*[\u2013\u2014: -]\\s*', 'i');
-              const stripped = s.replace(re, '').trim();
-              return ensureWordRange(stripped, 27, 32);
+              const stripped = stripRolePrefix(s, key);
+               return ensureWordRange(stripped, 27, 32);
              });
              if (!key && !hasArr(b)) return "";
              return `
@@ -326,4 +323,17 @@ function ensureWordRange(text, minWords = 27, maxWords = 32) {
     return out;
   }
   return s;
+}
+
+function escapeRegExp(s) {
+  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripRolePrefix(bullet, role) {
+  const s = String(bullet || '').trim();
+  const k = String(role || '').trim();
+  if (!s || !k) return s;
+  // Match: "<role> - ..." or "<role> – ..." or "<role>: ..." (hyphen types included)
+  const re = new RegExp('^' + escapeRegExp(k) + '\\s*(?:\\u2013|\\u2014|-|:)\\s*', 'i');
+  return s.replace(re, '').trim();
 }
