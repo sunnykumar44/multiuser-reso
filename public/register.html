@@ -79,6 +79,20 @@
     .section-title { font-weight: bold; background: #162035; }
     .section-items { min-height: 80px; font-family: monospace; font-size: 13px; }
 
+    /* Mobile: prevent the section card header (title + placement + type) from overflowing/overlapping */
+    @media (max-width: 520px) {
+      .cs-row { grid-template-columns: 1fr !important; }
+      .cs-placement { width: 100% !important; }
+      /* Top row created by register-sections.js is inline-styled grid; override with !important */
+      #customSections > div > div[style*="grid-template-columns"] {
+        grid-template-columns: 1fr !important;
+      }
+      #customSections select,
+      #customSections input.cs-title {
+        width: 100% !important;
+      }
+    }
+
     @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
 
     /* ===== Print: hide site UI (nav/footer/buttons) and keep only resume if present ===== */
