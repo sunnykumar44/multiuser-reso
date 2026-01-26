@@ -111,22 +111,98 @@ function makeUserCard(nickname) {
   return li;
 }
 
+async function fetchUsersFromServer() {
+  try {
+    const resp = await fetch('/api/users?limit=50', { cache: 'no-store' });
+    if (!resp.ok) return [];
+    const j = await resp.json();
+    const users = Array.isArray(j?.users) ? j.users : [];
+    return users
+      .map(u => ({ nickname: String(u.nickname || '').trim().toLowerCase(), updatedAt: String(u.updatedAt || ''), lastTitle: String(u.lastTitle || '') }))
+      .filter(u => u.nickname);
+  } catch {
+    return [];
+  }
+}
+
+function fmtWhenFromServer(u) {
+  const t = u?.updatedAt;
+  if (!t) return 'saved (cloud)';
+  return 'saved: ' + String(t).replace('T', ' ').replace('Z', '');
+}
+
+function makeUserCardFromServer(user) {
+  const nickname = user.nickname;
+  const li = document.createElement('li');
+  li.className = 'user-card';
+
+  const left = document.createElement('div');
+  left.className = 'user-left';
+
+  const name = document.createElement('div');
+  name.className = 'user-name';
+  name.textContent = nickname;
+
+  const meta = document.createElement('div');
+  meta.className = 'user-meta';
+  meta.textContent = fmtWhenFromServer(user);
+
+  left.appendChild(name);
+  left.appendChild(meta);
+
+  const dots = document.createElement('button');
+  dots.className = 'dots';
+  dots.type = 'button';
+  dots.textContent = '⋯';
+  dots.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+  const menu = createPortalMenu({ nickname });
+  dots.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMenuAtButton({ menu, btnEl: dots });
+  });
+
+  li.addEventListener('click', () => {
+    closeAllMenus();
+    window.location.href = `./unlock.html?u=${encodeURIComponent(nickname)}&next=resume`;
+  });
+
+  li.appendChild(left);
+  li.appendChild(dots);
+  return li;
+}
+
 function renderUsers() {
   userList.innerHTML = "";
-  const nicknames = listUserNicknamesFromLocalStorage();
+  const localNicknames = listUserNicknamesFromLocalStorage().map(n => String(n).trim().toLowerCase());
+  // Render local first for instant UI
+  localNicknames.forEach((n) => userList.appendChild(makeUserCard(n)));
 
-  countHint.textContent = nicknames.length ? `${nicknames.length} user(s)` : "No users yet";
+  // Then merge cloud users
+  (async () => {
+    const cloud = await fetchUsersFromServer();
+    const seen = new Set(localNicknames);
+    const mergedCount = localNicknames.length + cloud.filter(u => !seen.has(u.nickname)).length;
+    countHint.textContent = mergedCount ? `${mergedCount} user(s)` : 'No users yet';
 
-  if (!nicknames.length) {
-    const empty = document.createElement("div");
-    empty.className = "hint";
-    empty.style.marginTop = "8px";
-    empty.textContent = "No saved profiles yet. Click “Create your resume →”.";
-    userList.appendChild(empty);
-    return;
-  }
+    // Append cloud users not already shown
+    for (const u of cloud) {
+      if (seen.has(u.nickname)) continue;
+      seen.add(u.nickname);
+      userList.appendChild(makeUserCardFromServer(u));
+    }
 
-  nicknames.forEach((n) => userList.appendChild(makeUserCard(n)));
+    if (!mergedCount) {
+      const empty = document.createElement('div');
+      empty.className = 'hint';
+      empty.style.marginTop = '8px';
+      empty.textContent = 'No saved profiles yet. Click “Create your resume →”.';
+      userList.appendChild(empty);
+    }
+  })();
+
+  // optimistic count for local-only while cloud loads
+  countHint.textContent = localNicknames.length ? `${localNicknames.length} user(s)` : 'Loading…';
 }
 
 renderUsers();
