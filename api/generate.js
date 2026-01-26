@@ -1171,13 +1171,18 @@ OUTPUT: JSON only. No markdown.
     try {
       const historyTitle = buildHistoryTitle({ nickname, profile, jd: jdNormalized, finalJD });
       if (historyTitle) {
+        const histNickname = String(nickname || profile?.nickname || profile?.fullName || 'anonymous').trim().toLowerCase();
+        const createdAt = new Date().toISOString();
+        const id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
         await saveHistory({
-          nickname: nickname || profile?.fullName || 'anonymous',
+          id,
+          nickname: histNickname,
           title: historyTitle,
           jd: jdNormalized,
           finalJD,
           html: htmlSkeleton,
-          createdAt: new Date().toISOString(),
+          createdAt,
         });
         debug.historySaved = true;
       } else {
