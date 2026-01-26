@@ -1,18 +1,20 @@
 import { renderPaper } from "./resume-render.js";
 import * as History from "./history-manager.js";
 
-// Provide a safe selector helper compatible with existing code in this file:
-// - $("id") returns element by id (used widely here)
-// - $("#css") works too
+// Local selector helpers (avoid clobbering libraries like jQuery on hosted builds)
+const $id = (id) => document.getElementById(id);
+const $qs = (sel) => document.querySelector(sel);
+// Back-compat: some older functions in this file expect `$()`.
+// Keep it local to this module unless not present.
 if (typeof window.$ !== 'function') {
   window.$ = (sel) => {
     if (typeof sel !== 'string') return null;
     const s = sel.trim();
     if (!s) return null;
     if (s.startsWith('#') || s.startsWith('.') || s.includes(' ') || s.includes('[') || s.includes('>')) {
-      return document.querySelector(s);
+      return $qs(s);
     }
-    return document.getElementById(s);
+    return $id(s);
   };
 }
 
