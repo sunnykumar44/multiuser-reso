@@ -196,15 +196,29 @@
     a { color: var(--primary); text-decoration:none; }
 
     [contenteditable]:hover {
-      background-color: rgba(99, 102, 241, 0.05);
-      outline: 1px dashed rgba(99, 102, 241, 0.3);
+      background-color: rgba(99, 102, 241, 0.08);
+      outline: 1px dashed rgba(99, 102, 241, 0.35);
       cursor: text;
       border-radius: 3px;
     }
     [contenteditable]:focus {
-      outline: 2px solid var(--primary);
-      background-color: rgba(99, 102, 241, 0.08);
+      outline: 2px solid rgba(99, 102, 241, 0.55);
+      background-color: rgba(99, 102, 241, 0.10);
       border-radius: 3px;
+    }
+
+    /* If the container itself is contenteditable, keep it visually neutral */
+    .paper[contenteditable="true"]:hover,
+    .paper[contenteditable="true"]:focus {
+      background-color: var(--paper) !important;
+      outline: none !important;
+    }
+
+    /* Ensure editable text stays readable on white paper */
+    .paper [contenteditable="true"] {
+      color: var(--ink) !important;
+      -webkit-text-fill-color: var(--ink) !important;
+      caret-color: var(--ink) !important;
     }
 
     @media print {
