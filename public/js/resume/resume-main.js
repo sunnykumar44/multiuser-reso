@@ -378,6 +378,8 @@ function setScopeToUI(scopeArr) {
 }
 
 function addCheckbox(container, labelText) {
+  // Ensure draft is available and normalized
+  const d = ensureDraft();
   const label = document.createElement("label");
   label.style.cssText =
     "margin:0; cursor:pointer; display:flex; align-items:center; gap:6px; width:100%;";
@@ -388,15 +390,15 @@ function addCheckbox(container, labelText) {
   input.value = labelText;
 
   // default ON only when draft.scope saved OR profile has content for this title
-  const hasSavedScope = Array.isArray(draft.scope) && draft.scope.length > 0;
+  const hasSavedScope = Array.isArray(d.scope) && d.scope.length > 0;
   const profileHas = typeof labelText === 'string' && profileHasContentForTitle(labelText);
-  input.checked = hasSavedScope ? draft.scope.map(x => String(x).toLowerCase()).includes(String(labelText).toLowerCase()) : !!profileHas;
+  input.checked = hasSavedScope ? d.scope.map(x => String(x).toLowerCase()).includes(String(labelText).toLowerCase()) : !!profileHas;
 
   input.addEventListener("change", () => {
-    draft.scope = getScopeFromUI();
+    d.scope = getScopeFromUI();
     // changing scope invalidates html override (because sections may hide/show)
-    draft.htmlOverride = "";
-    saveDraft(draft);
+    d.htmlOverride = "";
+    saveDraft(d);
     renderWithDraft();
   });
 
@@ -441,7 +443,7 @@ function profileHasContentForTitle(title) {
 }
 
 function renderAiScope(profile) {
-  ensureDraft();
+  const d = ensureDraft();
   const list = $("ai-scope-list");
   if (!list) return;
   list.innerHTML = "";
@@ -459,15 +461,15 @@ function renderAiScope(profile) {
   if (hasEducation) profileTitles.push('Education');
 
   // AI-only sections from draft
-  const aiOnlyTitles = (draft.aiOnlySections || []).map((s) => s?.title).filter(Boolean);
+  const aiOnlyTitles = (d.aiOnlySections || []).map((s) => s?.title).filter(Boolean);
 
   const allTitles = uniqByLower([...standards, ...profileTitles, ...aiOnlyTitles]);
 
   allTitles.forEach((t) => addCheckbox(list, titleCase(t)));
 
   // If draft.scope exists, apply it
-  if (Array.isArray(draft.scope) && draft.scope.length > 0) {
-    setScopeToUI(draft.scope);
+  if (Array.isArray(d.scope) && d.scope.length > 0) {
+    setScopeToUI(d.scope);
   }
 }
 
