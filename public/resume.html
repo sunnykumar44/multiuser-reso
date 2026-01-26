@@ -176,6 +176,8 @@
       padding: 18mm 16mm;
       border: 1px solid rgba(255,255,255,.06);
       box-shadow: 0 30px 80px rgba(0,0,0,.55);
+      -webkit-user-select: text;
+      user-select: text;
     }
     .r-section{margin-top:12px}
     .r-title{
@@ -195,31 +197,48 @@
     .hr{height:1px;background:var(--line);margin:10px 0}
     a { color: var(--primary); text-decoration:none; }
 
-    [contenteditable]:hover {
-      background-color: rgba(99, 102, 241, 0.08);
-      outline: 1px dashed rgba(99, 102, 241, 0.35);
-      cursor: text;
-      border-radius: 3px;
-    }
-    [contenteditable]:focus {
-      outline: 2px solid rgba(99, 102, 241, 0.55);
-      background-color: rgba(99, 102, 241, 0.10);
-      border-radius: 3px;
+    /* Editable UX on white paper: keep highlights subtle and readable */
+    .paper {
+      -webkit-user-select: text;
+      user-select: text;
     }
 
-    /* If the container itself is contenteditable, keep it visually neutral */
-    .paper[contenteditable="true"]:hover,
-    .paper[contenteditable="true"]:focus {
-      background-color: var(--paper) !important;
-      outline: none !important;
+    /* Prevent browser selection overlay from making text look dark/blue */
+    .paper ::selection {
+      background: rgba(99, 102, 241, 0.18);
+      color: var(--ink);
+    }
+    .paper ::-moz-selection {
+      background: rgba(99, 102, 241, 0.18);
+      color: var(--ink);
     }
 
-    /* Ensure editable text stays readable on white paper */
-    .paper [contenteditable="true"] {
-      color: var(--ink) !important;
-      -webkit-text-fill-color: var(--ink) !important;
-      caret-color: var(--ink) !important;
-    }
+     [contenteditable]:hover {
+      background-color: rgba(99, 102, 241, 0.04);
+      outline: 1px dashed rgba(99, 102, 241, 0.20);
+       cursor: text;
+       border-radius: 3px;
+     }
+     [contenteditable]:focus {
+      outline: 2px solid rgba(99, 102, 241, 0.35);
+      background-color: rgba(99, 102, 241, 0.05);
+       border-radius: 3px;
+     }
+
+     /* If the container itself is contenteditable, keep it visually neutral */
+     .paper[contenteditable="true"]:hover,
+     .paper[contenteditable="true"]:focus {
+       background-color: var(--paper) !important;
+       outline: none !important;
+     }
+
+     /* Ensure editable text stays readable on white paper */
+     .paper [contenteditable="true"] {
+       color: var(--ink) !important;
+       -webkit-text-fill-color: var(--ink) !important;
+       caret-color: var(--ink) !important;
+      background: transparent !important;
+     }
 
     @media print {
       /* Hide all app UI by default */
