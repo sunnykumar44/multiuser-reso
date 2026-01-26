@@ -1160,3 +1160,32 @@ document.addEventListener('DOMContentLoaded', () => {
   ensureAiScopeChecklistUI();
   ensureProfileAndInitialRender();
 });
+
+// public/js/resume/resume-main.js
+// ...existing code...
+
+ function enableInlineEditing(rootEl) {
+   try {
+     if (!rootEl) return;
+
+    // Make the preview container editable (covers dynamic/unknown markup).
+    try { rootEl.contentEditable = true; } catch (_) {}
+
+    // If server returned .generated-resume, allow editing within it as well.
+    const editableRoot = rootEl.querySelector('.generated-resume') || rootEl;
+    try { editableRoot.contentEditable = true; } catch (_) {}
+
+    editableRoot.querySelectorAll('p, li, div, span, h1, h2, h3').forEach((el) => {
+      try { el.contentEditable = true; } catch (_) {}
+    });
+   } catch (_) {}
+ }
+
+// Ensure editability whenever the preview HTML changes (covers history loads, generate, reset, etc.)
+try {
+  const paperNode = document.getElementById('paper');
+  if (paperNode && !paperNode.__editableObserver) {
+    paperNode.__editableObserver = new MutationObserver(() => enableInlineEditing(paperNode));
+    paperNode.__editableObserver.observe(paperNode, { childList: true, subtree: true });
+  }
+} catch (_) {}
