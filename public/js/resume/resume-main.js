@@ -253,6 +253,26 @@ let pendingHtmlOverride = null;
 let ignoreAutosaveUntil = 0;
 let lastSavedHtmlOverride = null;
 
+// Show/hide the Undo-edits button
+function showUndoButton(show) {
+  try {
+    const btn = $("btnUndoEdits");
+    if (!btn) return;
+    btn.style.display = show ? "inline-block" : "none";
+  } catch (_) {}
+}
+
+// Update the "Edited" badge visibility based on draft.htmlOverride
+function updateEditBadge() {
+  try {
+    const badge = $("editBadge");
+    if (!badge) return;
+    const present = draft && typeof draft.htmlOverride === "string" && draft.htmlOverride.trim().length > 0;
+    badge.style.display = present ? "inline-block" : "none";
+    showUndoButton(present && !!lastSavedHtmlOverride);
+  } catch (_) {}
+}
+
 // Ensure draft is defined as early as possible (some functions reference it during init)
 // eslint-disable-next-line no-var
 // var draft = (typeof draft !== 'undefined' && draft) ? draft : null;
