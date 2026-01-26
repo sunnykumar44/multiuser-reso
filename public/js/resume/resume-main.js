@@ -1,8 +1,6 @@
 import { renderPaper } from "./resume-render.js";
 import * as History from "./history-manager.js";
 
-const $ = (id) => document.getElementById(id);
-
 function setStatus(msg, kind = "") {
   const s = $("status");
   if (!s) return;
