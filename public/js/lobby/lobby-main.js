@@ -113,7 +113,14 @@ function makeUserCard(nickname) {
 
 let __usersFetchController = null;
 let __usersFetchPromise = null;
+let __usersFetchCache = { at: 0, users: [] };
 async function fetchUsersFromServer() {
+  // Short cache to avoid multiple calls during quick re-renders
+  const now = Date.now();
+  if (__usersFetchCache.users && (now - __usersFetchCache.at) < 5000) {
+    return __usersFetchCache.users;
+  }
+
   // If a request is already in-flight, reuse it (prevents duplicate calls)
   if (__usersFetchPromise) return __usersFetchPromise;
 
@@ -130,13 +137,15 @@ async function fetchUsersFromServer() {
       if (!resp.ok) return [];
       const j = await resp.json();
       const users = Array.isArray(j && j.users) ? j.users : [];
-      return users
+      const out = users
         .map(u => ({
           nickname: String(u && u.nickname ? u.nickname : '').trim().toLowerCase(),
           updatedAt: String(u && u.updatedAt ? u.updatedAt : ''),
           lastTitle: String(u && u.lastTitle ? u.lastTitle : ''),
         }))
         .filter(u => u.nickname);
+      __usersFetchCache = { at: Date.now(), users: out };
+      return out;
     } catch (e) {
       // Abort is expected when navigating quickly
       return [];

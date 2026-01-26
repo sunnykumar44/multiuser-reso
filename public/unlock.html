@@ -172,7 +172,7 @@
         } else {
           // Fetch encrypted blob from cloud (still needs PIN to decrypt locally)
           setStatus('No local profile found. Fetching encrypted profile from cloud...', 'ok');
-          const resp = await fetch(`./api/profile?nickname=${encodeURIComponent(nickname)}`, { cache: 'no-store' });
+          const resp = await fetch(`/api/profile?nickname=${encodeURIComponent(nickname)}`, { cache: 'no-store' });
           if (!resp.ok) throw new Error(`No local profile found for "${nickname}" (and not found in cloud)`);
           const j = await resp.json();
           if (!j || !j.ok || !j.blob) throw new Error('Cloud profile response invalid');
