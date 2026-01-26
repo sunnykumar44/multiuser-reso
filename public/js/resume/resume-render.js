@@ -250,8 +250,11 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
       <div class="r-section">
         <div class="r-title">Education</div>
         <div class="r-text" style="display:flex; justify-content:space-between; gap:10px;" ${EDIT_ATTRS}>
-          <span>${[college, branch].filter(Boolean).join(" — ")}</span>
-          <span class="muted" style="white-space:nowrap;">${eduYears}</span>
+          <div>
+            ${hasText(college) ? `<div style="font-weight:800;">${college}</div>` : ''}
+            ${hasText(branch) ? `<div class="muted">${branch}</div>` : ''}
+          </div>
+          <div class="muted" style="white-space:nowrap; align-self:flex-start;">${eduYears}</div>
         </div>
       </div>
     ` : ""}
