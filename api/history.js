@@ -20,8 +20,8 @@ module.exports = async (req, res) => {
   try {
     const nickname = normalizeNickname(req.query && req.query.nickname ? req.query.nickname : '');
     if (!nickname) return res.status(400).json({ ok: false, error: 'Missing nickname' });
-    const limitRaw = (req.query && req.query.limit) ? Number(req.query.limit) : 20;
-    const limit = Math.max(1, Math.min(limitRaw || 20, 50));
+    const limitRaw = (req.query && req.query.limit) ? Number(req.query.limit) : 10;
+    const limit = Math.max(1, Math.min(limitRaw || 10, 50));
 
     const db = initDb();
     // Avoid requiring a composite index (where + orderBy). Fetch recent docs and filter in-memory.

@@ -1090,7 +1090,7 @@ async function wireRecentResumes() {
     const status = document.getElementById('status');
     if (status) status.textContent = 'Loading recent resumes…';
     const nick = normalizeNickname(sessionStorage.getItem('unlockedNickname') || '');
-    const items = await fetchHistory(nick, 20);
+    const items = await fetchHistory(nick, 10);
     renderHistoryList(items);
     if (status) status.textContent = '';
   });
