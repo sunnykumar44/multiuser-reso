@@ -1167,3 +1167,51 @@ try {
     paperNode.__editableObserver.observe(paperNode, { childList: true, subtree: true });
   }
 } catch (_) {}
+
+// public/js/resume/resume-main.js
+// ...existing code...
+
+(async function patchGenerateFlowToPreferProfileRender() {
+  const btn = $('btnGen');
+  if (!btn) return;
+  if (btn.__eduFixPatched) return;
+  btn.__eduFixPatched = true;
+
+  // If another handler already exists, we can't easily remove it without refs.
+  // Instead, after any click, force a re-render from latest profile unless the server returned explicit HTML.
+  btn.addEventListener('click', async () => {
+    // Give other click handlers time to run first.
+    setTimeout(async () => {
+      try {
+        const paper = document.getElementById('paper');
+        if (!paper) return;
+
+        const raw = sessionStorage.getItem('unlockedProfile');
+        const profile = safeParseJSON(raw, null);
+        if (!profile) return;
+
+        // Reload draft (it may have been updated by Generate handler)
+        const d = loadDraft();
+        const explicitHtml = d && typeof d.htmlOverride === 'string' ? d.htmlOverride.trim() : '';
+
+        // If htmlOverride exists, keep it. Otherwise render from profile so Education fields show.
+        if (!explicitHtml) {
+          const mod = await import('./resume-render.js');
+          mod.renderPaper({
+            paperEl: paper,
+            profile,
+            jd: d?.jd || $('jd')?.value || '',
+            mode: d?.mode || getActive('modes', 'data-mode') || 'ats',
+            template: d?.template || getActive('templates', 'data-template') || 'classic',
+            scope: d?.scope || (typeof getScopeFromUI === 'function' ? getScopeFromUI() : []),
+            htmlOverride: '',
+          });
+          enableInlineEditing(paper);
+        }
+      } catch (e) {
+        console.warn('post-generate profile rerender failed', e);
+      }
+    }, 0);
+  }, true);
+})();
+//# sourceMappingURL=resume-main.js.map
