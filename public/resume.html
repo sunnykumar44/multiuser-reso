@@ -246,6 +246,44 @@
       .grid{grid-template-columns:1fr}
       .paper{width:100%;min-height:auto}
     }
+
+    /* Mobile layout: prevent controls/header from overlapping resume preview */
+    @media (max-width: 720px) {
+      /* Common containers used in this page */
+      .container, .wrap, .page, .layout, .main {
+        width: 100% !important;
+        max-width: 100% !important;
+      }
+
+      /* If the page uses a two-column layout, force it to stack */
+      .layout, .grid, .two-col, .columns {
+        display: block !important;
+      }
+
+      /* Disable fixed/sticky toolbars that can cover content */
+      header, nav, .toolbar, .topbar, .sticky, .fixed, #editor-controls {
+        position: static !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        z-index: auto !important;
+      }
+
+      /* Ensure the resume preview is not underneath any overlay */
+      #resumePreview, #resume-preview, .resume-preview, .preview, .preview-pane {
+        position: relative !important;
+        z-index: 1 !important;
+        margin-top: 12px !important;
+      }
+
+      /* Give controls their own flow space */
+      #sidePanel, #controls, .controls, .panel, .sidebar {
+        position: relative !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-bottom: 12px !important;
+      }
+    }
   </style>
 </head>
 
