@@ -1257,13 +1257,13 @@ OUTPUT: JSON only. No markdown.
 
     // Guarantee profile education fields are reflected in HTML if the model omitted them
     try {
-      const _p = (typeof profile !== 'undefined') ? profile : (req.body && req.body.profile ? req.body.profile : {});
-      if (typeof finalHtml === 'string' && finalHtml.trim()) {
-        finalHtml = ensureEducationInHtml({ html: finalHtml, profile: _p });
+      const _p = (profile && typeof profile === 'object') ? profile : (body && body.profile ? body.profile : {});
+      if (typeof htmlSkeleton === 'string' && htmlSkeleton.trim()) {
+        htmlSkeleton = ensureEducationInHtml({ html: htmlSkeleton, profile: _p });
       }
     } catch (_) {}
 
-    return res.status(200).json({ ok: true, generated: { html: finalHtml }, debug });
+    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
   } catch (err) {
     return res.status(500).json({ error: err.message });

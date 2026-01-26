@@ -885,9 +885,12 @@ async function callGenerateAPI(payload) {
         if (paperEl) {
           try {
             paperEl.innerHTML = draft.htmlOverride;
+            try { paperEl.contentEditable = true; } catch (_) {}
             enableInlineEditing(paperEl);
           } catch (e) {
             paperEl.innerHTML = draft.htmlOverride;
+            try { paperEl.contentEditable = true; } catch (_) {}
+            enableInlineEditing(paperEl);
           }
         }
 
@@ -902,8 +905,11 @@ async function callGenerateAPI(payload) {
         const fallbackHtml = clientBuildFallback(currentProfile, jdNow, mode, template, scope, effectiveNickname);
         draft.htmlOverride = fallbackHtml;
         saveDraft(draft);
-        if (paperEl) paperEl.innerHTML = draft.htmlOverride;
-        enableInlineEditing(paperEl);
+        if (paperEl) {
+          paperEl.innerHTML = draft.htmlOverride;
+          try { paperEl.contentEditable = true; } catch (_) {}
+          enableInlineEditing(paperEl);
+        }
         updateEditBadge();
       }
     } catch (err) {
@@ -1124,6 +1130,12 @@ function applyHistoryHtmlToDraft(html) {
   d.htmlOverride = String(html || '');
   saveDraft(d);
   updateEditBadge();
+  try {
+    if (paperEl) {
+      try { paperEl.contentEditable = true; } catch (_) {}
+      enableInlineEditing(paperEl);
+    }
+  } catch (_) {}
 }
 
 // Single Recent Resumes wire-up (server history API)
