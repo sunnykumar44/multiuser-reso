@@ -928,6 +928,34 @@ function clientBuildFallback(profile = {}, jd = '', mode = 'ats', template = 'cl
     } else if (key === 'skills') {
       const skills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(/\r?\n/) : []);
       if (skills && skills.length) { parts.push('<section><h3>Skills</h3><ul>'); skills.forEach(s=>parts.push(`<li>${escapeHtml(s)}</li>`)); parts.push('</ul></section>'); }
+    } else if (key === 'education') {
+      // Prefer structured education array, then educationEntries, then legacy fields
+      const eds = Array.isArray(profile.education) ? profile.education : (Array.isArray(profile.educationEntries) ? profile.educationEntries : null);
+      if (eds && eds.length) {
+        parts.push('<section><h3>Education</h3>');
+        eds.forEach(ed => {
+          const inst = ed.institution || ed.school || ed.college || '';
+          const degree = ed.degree || ed.program || ed.branch || '';
+          const year = ed.year || ed.graduationYear || ed.endYear || ((ed.startYear && ed.endYear) ? `${ed.startYear} - ${ed.endYear}` : '');
+          parts.push('<div class="edu-item">');
+          if (inst) parts.push(`<strong>${escapeHtml(inst)}</strong>`);
+          if (degree) parts.push(`<div>${escapeHtml(degree)}</div>`);
+          if (year) parts.push(`<small>${escapeHtml(String(year))}</small>`);
+          parts.push('</div>');
+        });
+        parts.push('</section>');
+      } else if (profile.college) {
+        // legacy single college field + optional branch/year
+        parts.push('<section><h3>Education</h3>');
+        parts.push('<div class="edu-item">');
+        parts.push(`<strong>${escapeHtml(profile.college)}</strong>`);
+        const branch = profile.branch || profile.collegeBranch || profile.degree || '';
+        const year = profile.graduationYear || profile.year || '';
+        if (branch) parts.push(`<div>${escapeHtml(branch)}</div>`);
+        if (year) parts.push(`<small>${escapeHtml(String(year))}</small>`);
+        parts.push('</div>');
+        parts.push('</section>');
+      }
     } else if (key.includes('experience') || key.includes('work') || key.includes('project')) {
       const secs = Array.isArray(profile.customSections) ? profile.customSections.filter(s=>s && (String(s.type||'')==='entries')) : [];
       if (secs.length) {
@@ -948,8 +976,6 @@ function clientBuildFallback(profile = {}, jd = '', mode = 'ats', template = 'cl
   parts.push('</div>');
   return parts.join('\n');
 }
-
-function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // Ensure server failures fall back to client render so users can still edit
 // We add handling inside the existing catch of the Generate handler by augmenting the catch below.
