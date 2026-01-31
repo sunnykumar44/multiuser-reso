@@ -1,6 +1,14 @@
 const { saveHistory } = require("./firebase");
 const crypto = require('crypto');
 
+// HTML escaping (hoisted)
+function escapeHtml(s = "") {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 // Simple in-memory daily limiter (resets when date changes; per server instance)
 const DAILY_LIMIT = Number(process.env.DAILY_LIMIT || 20);
 globalThis.__DAILY_LIMIT_STATE__ = globalThis.__DAILY_LIMIT_STATE__ || { date: null, byUser: new Map() };
