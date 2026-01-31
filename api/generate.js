@@ -169,6 +169,48 @@ function getSmartFallback(section, jd, rand = Math.random) {
   return "";
 }
 
+// JD-derived (non-preset) certs/achievements: used only when AI is enabled but returns invalid output.
+function jdDerivedCerts(finalJD, rand = Math.random) {
+  const tech = extractKeywordsFromJD(finalJD, 'technical').map(s => s.toLowerCase());
+  const out = [];
+  const add = (x) => { if (x && !out.includes(x)) out.push(x); };
+
+  if (tech.includes('aws') || tech.some(t => t.includes('aws'))) add('AWS Certified Cloud Practitioner');
+  if (tech.includes('azure') || tech.some(t => t.includes('azure'))) add('Microsoft Certified: Azure Fundamentals');
+  if (tech.includes('gcp') || tech.some(t => t.includes('gcp')) || tech.includes('bigquery')) add('Google Cloud Digital Leader');
+  if (tech.includes('python')) add('PCEP – Certified Entry-Level Python Programmer');
+  if (tech.includes('java') || tech.includes('spring')) add('Oracle Certified Associate, Java SE 11 Developer');
+  if (tech.includes('kubernetes') || tech.includes('docker')) add('Docker Certified Associate (DCA)');
+  if (tech.includes('sql') || tech.includes('mysql') || tech.includes('postgresql')) add('Microsoft Certified: Azure Data Fundamentals');
+  if (tech.includes('tableau')) add('Tableau Desktop Specialist');
+
+  // ensure 2
+  const fallbackPool = [
+    'AWS Certified Cloud Practitioner',
+    'Microsoft Certified: Azure Fundamentals',
+    'Google Cloud Digital Leader',
+    'PCEP – Certified Entry-Level Python Programmer',
+    'Oracle Certified Associate, Java SE 11 Developer'
+  ];
+  while (out.length < 2) add(shuffleSeeded(fallbackPool.slice(), rand)[0]);
+  return out.slice(0, 2);
+}
+
+function jdDerivedAchievements(finalJD, rand = Math.random) {
+  const techs = extractKeywordsFromJD(finalJD, 'technical');
+  const t1 = techs[0] || 'core tools';
+  const t2 = techs[1] || 'automation';
+  const pct1 = randomPercent(rand, 12, 38);
+  const pct2 = randomPercent(rand, 10, 35);
+  const variants = shuffleSeeded([
+    `Reduced processing time by ${pct1}% by optimizing workflows using ${t1}.`,
+    `Improved reliability by ${pct1}% by adding validation, retries, and monitoring around ${t1}.`,
+    `Automated repetitive tasks using ${t2}, saving ~${pct2}% manual effort.`,
+    `Enhanced data/API quality by introducing checks and structured logging, reducing defects by ${pct2}%.`
+  ], rand);
+  return variants.slice(0, 2);
+}
+
 // --------------------
 // Fallback content builders (must never throw)
 // --------------------
@@ -320,6 +362,29 @@ function validateAchievements(val) {
     if (parts.some(p => /\b(improv|improved|reduc|reduced|automat|automated|saved)\b/i.test(p))) return true;
     return false;
   } catch (_) { return false; }
+}
+
+function splitPipeBullets(val) {
+  return String(val || '')
+    .split('|')
+    .map(s => String(s).trim())
+    .filter(Boolean)
+    .map(s => s.replace(/^[-•\s]+/, '').trim())
+    .filter(Boolean);
+}
+
+function stripRolePrefix(bullet, roleTitle) {
+  try {
+    const b = String(bullet || '').trim();
+    const role = String(roleTitle || '').trim();
+    if (!b) return b;
+    if (!role) return b;
+    // Remove common "Role – ..." prefix
+    const re = new RegExp('^' + role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[–-:]\\s*', 'i');
+    return b.replace(re, '').trim();
+  } catch (_) {
+    return String(bullet || '').trim();
+  }
 }
 
 // --- CONSTANTS ---
@@ -584,6 +649,10 @@ async function callGeminiFlash(promptText, opts = {}) {
   const base = `https://generativelanguage.googleapis.com/v1beta`;
   const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
+  // Track last model tried/succeeded for debugging.
+  globalThis.__GEMINI_LAST_MODEL_TRIED__ = globalThis.__GEMINI_LAST_MODEL_TRIED__ || '';
+  globalThis.__GEMINI_LAST_MODEL_USED__ = globalThis.__GEMINI_LAST_MODEL_USED__ || '';
+
   // Cache model choice for this server instance to avoid ListModels on every request
   globalThis.__GEMINI_TEXT_MODELS__ = globalThis.__GEMINI_TEXT_MODELS__ || null;
 
@@ -620,8 +689,14 @@ async function callGeminiFlash(promptText, opts = {}) {
       return picked;
     }
 
-    // Exclude image/vision models
-    const textOnly = names.filter(n => n.includes('gemini') && !n.includes('image') && !n.includes('vision'));
+    // Exclude image/vision/audio/preview models (reduce 404s like native-audio-preview)
+    const textOnly = names.filter(n =>
+      n.includes('gemini') &&
+      !n.includes('image') &&
+      !n.includes('vision') &&
+      !n.includes('audio') &&
+      !n.includes('preview')
+    );
     const preferred = textOnly.filter(n => n.includes('flash') || n.includes('pro'));
     let picked = preferred.length ? preferred : (textOnly.length ? textOnly : fallback);
     if (preferredFromEnv) {
@@ -660,6 +735,7 @@ async function callGeminiFlash(promptText, opts = {}) {
 
   let lastErr = null;
   for (const modelName of candidatesModels) {
+    globalThis.__GEMINI_LAST_MODEL_TRIED__ = modelName;
     const url = `${base}/${modelName}:generateContent?${keyQs}`;
     const body = buildBody(!opts.__noPenalty);
 
@@ -696,101 +772,39 @@ async function callGeminiFlash(promptText, opts = {}) {
       lastErr = new Error('No response from AI');
       continue;
     }
+    
+    globalThis.__GEMINI_LAST_MODEL_USED__ = modelName;
     return candidate;
   }
 
   throw lastErr || new Error('Gemini API failed');
 }
 
-function normalizeJD(jdRaw = '') {
-  let s = String(jdRaw || '').trim();
-  if (!s) return '';
-  s = s.replace(/\s+/g, ' ');
+// --- HELPER 3: ENSURE EDUCATION IS REFLECTED IN HTML ---
+function ensureEducationInHtml({ html, profile }) {
+  try {
+    const edu = Array.isArray(profile.education) ? profile.education.filter(e => e && e.trim()) : [];
+    const coll = Array.isArray(profile.college) ? profile.college.filter(c => c && c.trim()) : [];
+    const hasEdu = edu.length > 0;
+    const hasColl = coll.length > 0;
 
-  // Common misspellings / variants for roles & skills
-  const map = [
-    // Very common typos
-    [/\bdevloper\b/gi, 'developer'],
-    [/\bjav\b/gi, 'java'],
-    [/\bjav\s+developer\b/gi, 'java developer'],
-    [/\bjava\s*devloper\b/gi, 'java developer'],
-    [/\bjav\s+devloper\b/gi, 'java developer'],
+    // If no education info, inject a placeholder
+    if (!hasEdu && !hasColl) {
+      return html.replace(/(<\/div>\s*<\/div>)/, `<div><i>(Add Education)</i></div>$1`);
+    }
 
-    [/\bdata\s*analy(st|ts)\b/gi, 'data analyst'],
-    [/\bdata\s*analys(t|ts)\b/gi, 'data analyst'],
-    [/\bdata\s*analyst\b/gi, 'data analyst'],
-    [/\bjava\s*dev(eloper)?\b/gi, 'java developer'],
-    [/\bpy(thon)?\s*dev(eloper)?\b/gi, 'python developer'],
-    [/\bsoftw(are)?\s*eng(ineer)?\b/gi, 'software engineer'],
-    [/\bweb\s*dev(eloper)?\b/gi, 'web developer'],
-    [/\bmid(?:dle)?\s*ware\b/gi, 'middleware'],
+    // Guarantee at least one education entry is visible
+    const eduHtml = edu.map(e => `<div>${escapeHtml(e)}</div>`).join('');
+    const collHtml = coll.map(c => `<div>${escapeHtml(c)}</div>`).join('');
+    const combined = `${eduHtml}${eduHtml && collHtml ? '<hr>' : ''}${collHtml}`;
 
-    // Tech typos
-    [/\bpostgre\s*sql\b/gi, 'PostgreSQL'],
-    [/\bpostgress\b/gi, 'PostgreSQL'],
-    [/\bjavscript\b/gi, 'JavaScript'],
-    [/\btype\s*script\b/gi, 'TypeScript'],
-    [/\bpower\s*bi\b/gi, 'PowerBI'],
-    [/\btablue\b/gi, 'Tableau'],
-    [/\bexcell\b/gi, 'Excel'],
-    [/\bscikit\s*learn\b/gi, 'Scikit-learn'],
-    [/\bjup(y)?ter\b/gi, 'Jupyter'],
-    [/\brest\s*api\b/gi, 'REST APIs'],
-  ];
-
-  for (const [re, rep] of map) s = s.replace(re, rep);
-  return s;
+    return html.replace(/(<\/div>\s*<\/div>)/, `${combined}$1`);
+  } catch (e) {
+    return html;
+  }
 }
 
-function looksLikeGarbageJD(s) {
-  const t = String(s || '').trim();
-  if (!t) return true;
-  if (t.length < 6) return true;
-  const letters = (t.match(/[a-z]/gi) || []).length;
-  const spaces = (t.match(/\s/g) || []).length;
-  const words = t.split(/\s+/).filter(Boolean);
-  const avgWord = words.length ? (t.replace(/\s+/g, '').length / words.length) : t.length;
-  const nonAlphaNum = (t.match(/[^a-z0-9\s]/gi) || []).length;
-
-  // Heuristics for nonsense: very long single token / low spaces, lots of symbols, weird word lengths
-  if (words.length <= 1 && t.length >= 12) return true;
-  if (spaces === 0 && t.length >= 10) return true;
-  if (letters / Math.max(t.length, 1) < 0.55) return true;
-  if (nonAlphaNum / Math.max(t.length, 1) > 0.25) return true;
-  if (avgWord > 14) return true;
-  return false;
-}
-
-function inferRoleFromProfile(profile = {}) {
-  const skills = Array.isArray(profile.skills) ? profile.skills.map(s => String(s).toLowerCase()) : [];
-  const exp = Array.isArray(profile.customSections) ? JSON.stringify(profile.customSections).toLowerCase() : '';
-
-  const has = (k) => skills.some(s => s.includes(k)) || exp.includes(k);
-
-  if (has('tableau') || has('powerbi') || has('excel') || has('pandas') || has('numpy') || has('sql')) return 'data analyst';
-  if (has('spark') || has('airflow') || has('etl') || has('warehouse') || has('bigquery')) return 'data engineer';
-  if (has('spring') || has('hibernate') || has('java')) return 'java developer';
-  if (has('django') || has('flask') || has('python')) return 'python developer';
-  if (has('react') || has('frontend') || has('node') || has('javascript')) return 'web developer';
-  return 'software engineer';
-}
-
-// Helper to normalize arbitrary section titles into canonical buckets (hoisted function)
-function canonicalSectionName(name) {
-  const s = String(name || '').trim().toLowerCase();
-  if (!s) return '';
-  if (s.includes('work') || s.includes('experience') || s.includes('employment')) return 'Work Experience';
-  if (s.includes('project')) return 'Projects';
-  if (s.includes('technical') || s.includes('skill')) return 'Technical Skills';
-  if (s.includes('summary')) return 'Summary';
-  if (s.includes('education') || s.includes('college') || s.includes('degree')) return 'Education';
-  if (s.includes('cert') || s.includes('certificate')) return 'Certifications';
-  if (s.includes('achieve') || s.includes('award')) return 'Achievements';
-  if (s.includes('trait') || s.includes('character') || s.includes('soft')) return 'Character Traits';
-  // default: title-case the input for display
-  return String(name || '').trim().replace(/\s+/g, ' ').replace(/(^|\s)\S/g, l => l.toUpperCase());
-};
-
+// --- MAIN RESUME GENERATION HANDLER ---
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -801,11 +815,16 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") return res.status(204).end();
 
   try {
-    const requestSeed = makeSeed();
-    const rand = mulberry32(requestSeed);
-    const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-    const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
-    const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
+     const requestId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+     const generatedAt = new Date().toISOString();
+     const requestSeed = makeSeed();
+     const rand = mulberry32(requestSeed);
+     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+     const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
+
+     console.log('[generate] request', { requestId, generatedAt, requestSeed, aiOnly, hasGeminiKey: !!GEMINI_API_KEY });
+
+     const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
 
     // Normalize and dedupe incoming skills ("Python pre-processing" but on the server)
     if (profile && Array.isArray(profile.skills)) {
@@ -1038,7 +1057,26 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], invalidAI: {}, fallbackNote: '', retryAfterSeconds: 0, finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized };
+    const debug = {
+      attempts: [],
+      usedFallbackFor: [],
+      invalidAI: {},
+      fallbackNote: '',
+      retryAfterSeconds: 0,
+      finalJD,
+      aiEnabled: !!GEMINI_API_KEY,
+      aiOnly,
+      requestSeed,
+      requestId,
+      generatedAt,
+      gemini: {
+        lastModelTried: globalThis.__GEMINI_LAST_MODEL_TRIED__ || '',
+        lastModelUsed: globalThis.__GEMINI_LAST_MODEL_USED__ || ''
+      },
+      daily: remainingInfo,
+      jdWasInferred,
+      jdNormalized
+    };
 
     // Build intelligentPrompt (required for AI path)
     const intelligentPrompt = `
@@ -1071,270 +1109,234 @@ OUTPUT: JSON only. No markdown.
 `;
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
-        // Enforce local daily limit only when AI is requested
-        const ticket = consumeOne(userKey);
-        debug.daily = ticket;
-        if (!ticket.ok) {
-          return res.status(429).json({
-            ok: false,
-            error: `Daily limit reached (${ticket.limit}/day). Try again after UTC reset.`,
-            debug
-          });
-        }
+      // Enforce local daily limit only when AI is requested
+      const ticket = consumeOne(userKey);
+      debug.daily = ticket;
+      if (!ticket.ok) {
+        return res.status(429).json({
+          ok: false,
+          error: `Daily limit reached (${ticket.limit}/day). Try again after UTC reset.`,
+          debug
+        });
+      }
 
-        // Allow refunding daily ticket if Gemini quota blocks the request (429)
-        const refundDailyTicket = () => {
-          try {
-            const state = globalThis.__DAILY_LIMIT_STATE__;
-            if (!state || !state.byUser) return;
-            const used = Number(state.byUser.get(userKey) || 0);
-            if (used > 0) state.byUser.set(userKey, used - 1);
-          } catch (_) {}
-        };
+      // Allow refunding daily ticket if Gemini quota blocks the request (429)
+      const refundDailyTicket = () => {
+        try {
+          const state = globalThis.__DAILY_LIMIT_STATE__;
+          if (!state || !state.byUser) return;
+          const used = Number(state.byUser.get(userKey) || 0);
+          if (used > 0) state.byUser.set(userKey, used - 1);
+        } catch (_) {}
+      };
 
-         // try AI with retries for short JD to encourage variability
-         const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
-         let aiData = null;
-         let lastError = null;
-         for (const t of temps) {
-            try {
-                const seed = requestSeed.toString(36);
-                const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
-                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, maxOutputTokens: 3000 });
-                try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
-                if (aiData) break;
-            } catch (e) {
-                lastError = e;
-                debug.attempts.push({ temp: t, parsed: false, error: e.message });
+      // try AI with retries for short JD to encourage variability
+      const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
+      let aiData = null;
+      let lastError = null;
+      for (const t of temps) {
+        try {
+            const seed = requestSeed.toString(36);
+            const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
+            const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, maxOutputTokens: 3000 });
+            try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
+            if (aiData) break;
+        } catch (e) {
+            lastError = e;
+            debug.attempts.push({ temp: t, parsed: false, error: e.message });
 
-                // If Gemini is rate-limiting, don't spin; fall back immediately
-                const msg = String(e && e.message ? e.message : '');
-                const retryMs = parseRetryDelayMs(msg);
-                if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
-                debug.attempts.push({ temp: t, parsed: false, error: msg });
+            // If Gemini is rate-limiting, don't spin; fall back immediately
+            const msg = String(e && e.message ? e.message : '');
+            const retryMs = parseRetryDelayMs(msg);
+            if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+            debug.attempts.push({ temp: t, parsed: false, error: msg });
 
-                // If Gemini is rate-limiting, don't spin; fall back immediately
-                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                  refundDailyTicket();
-                   break;
-                 }
-            }
-         }
-
-         try {
-             if (!aiData) throw lastError || new Error('No AI data returned');
-
-             Object.keys(aiPrompts).forEach(pid => {
-                 let val = aiData[pid];
-                 const type = aiTypes[pid];
-                 const label = aiLabels[pid] || '';
-
-                // Lightweight validation to enforce prompt rules; fallback if validation fails
-                try {
-                  let valid = true;
-                  if (val && typeof val === 'string') {
-                    if (type === 'summary') valid = validateSummary(val, rolePreset);
-                    else if (type === 'chips' && label === 'Technical Skills') valid = validateSkills(val, finalJD);
-                    else if (type === 'list' && label === 'Projects') valid = validateProjects(val, rolePreset);
-                    else if (type === 'list' && label === 'Achievements') valid = validateAchievements(val);
-                  } else {
-                    valid = false;
-                  }
-                  if (!valid) {
-                    debug.invalidAI[pid] = 'validation-failed';
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                    debug.usedFallbackFor.push(pid);
-                    return;
-                  }
-                } catch (vErr) {
-                  // On any validator error, treat as invalid and fallback
-                  debug.invalidAI[pid] = 'validation-exception';
-                  htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                  debug.usedFallbackFor.push(pid);
-                  return;
-                }
-
-    // (type and label already declared above)
-    if (!val || typeof val !== 'string' || val.trim().length < 2) {
-                     // Record why this section fell back (helps diagnose intermittent AI hiccups)
-                     let reason = 'unknown';
-                     if (val === undefined || val === null) reason = 'missing';
-                     else if (typeof val !== 'string') reason = `non-string (${typeof val})`;
-                     else if (typeof val === 'string' && val.trim().length < 2) reason = 'too-short/empty';
-                     debug.invalidAI[pid] = reason;
-
-                      const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
-                      htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
-                      debug.usedFallbackFor.push(pid);
-                      return;
-                 }
-
-                  // SKILLS: augment instead of replacing completely
-                if (type === 'chips' && label === 'Technical Skills') {
-                    let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
-                    parts = parts.map(normalizeSkillToken).filter(Boolean);
-                     // keep only likely technical tokens, else augment
-                    let techParts = parts.filter(p => isLikelyTechnical(p));
-                    // also allow rolePreset matches
-                    techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
-                    // add random preset skills to reach minimum using shuffled presets
-                    const shuffled = shuffle((rolePreset.skills || []).slice());
-                    for (const pick of shuffled) {
-                      if (techParts.length >= 12) break;
-                      const canonPick = normalizeSkillToken(pick);
-                      if (canonPick && !techParts.some(x => x.toLowerCase() === canonPick.toLowerCase())) techParts.push(canonPick);
-                    }
-
-                    techParts = dedupeSkillsLike(techParts);
-                     // Reorder with request-seeded randomness so even similar sets render differently
-                     techParts = shuffleSeeded(techParts, rand);
-                     if (techParts.length < 8) {
-                       // fallback using dynamic fallback
-                       const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
-                       htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
-                       debug.usedFallbackFor.push(pid);
-                       return;
-                     }
-                     const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                     return;
-                }
-
-                // TRAITS (soft chips)
-                if (type === 'chips' && label && label.toLowerCase().includes('character')) {
-                    let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
-                    let soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,12);
-                    const extras = extractKeywordsFromJD(finalJD, 'soft');
-                    soft = enforceNDistinct(soft, 6, extras.concat(['Ownership','Curiosity','Learning Agility','Collaboration','Time Management','Adaptability','Attention to Detail']));
-                    const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    return;
-                }
-
-                // CERTIFICATIONS
-                if (type === 'list' && label === 'Certifications') {
-                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    // Prefer AI-provided certs, but force deterministic variation via seeded pick.
-                    const augmented = enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []);
-                    const certs = pickTwoSeededDistinct(augmented, rand, rolePreset.certs || ['PCEP – Certified Entry-Level Python Programmer']);
-                    const lis = certs.map(b => `<li>${b}</li>`).join('');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    return;
-                }
-
-                // ACHIEVEMENTS
-                if (type === 'list' && label === 'Achievements') {
-                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    let achs = augmentAchievements(parts, rolePreset);
-                    // Force deterministic variation and keep two distinct items
-                    achs = pickTwoSeededDistinct(achs, rand, rolePreset.achievements || []).map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
-                    const lis = achs.map(b => `<li>${b}</li>`).join('');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    return;
-                }
-
-                // SUMMARY - ensure contains tech
-                if (type === 'summary') {
-                    let s = val.trim();
-                    const techs = rolePreset.skills || [];
-                    const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
-                    if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
-                    // Guaranteed visible variation
-                    s = seededSynonymSwap(s, rand);
-                    s = seededBumpMetric(s, rand);
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
-                    return;
-                }
-
-                // PROJECTS
-                if (type === 'list' && label === 'Projects') {
-                    const lis = parseProjectsToLis(val, rolePreset, rand);
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                     return;
-                }
-
-                // final fallback
-                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                 debug.invalidAI[pid] = debug.invalidAI[pid] || 'post-parse fallback';
-                 debug.usedFallbackFor.push(pid);
-             });
-         } catch (e) {
-             console.error('AI processing failed:', e);
-             if (aiOnly) {
-               const msg = String(e.message || 'AI failed');
-               if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                  const retryMs = parseRetryDelayMs(msg);
-                  if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
-                  refundDailyTicket();
-                  return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
-               }
-               return res.status(503).json({ ok: false, error: msg, debug });
+            // If Gemini is rate-limiting, don't spin; fall back immediately
+            if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+              refundDailyTicket();
+               break;
              }
-            // If quota/rate-limited, do not burn daily counter
-            {
-              const msg = String(e && e.message ? e.message : '');
-              if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                const retryMs = parseRetryDelayMs(msg);
-                if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
-                refundDailyTicket();
-              }
-            }
-             Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
-             // Ensure fallback still looks dynamic per request
-             htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
-         }
-     } else {
-          if (aiOnly) {
-            const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
-            return res.status(503).json({ ok: false, error: reason, debug });
-          }
-          Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
-          htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
+        }
      }
 
-    // If any section fell back, attach a short note explaining why this can happen
-    if (Array.isArray(debug.usedFallbackFor) && debug.usedFallbackFor.length) {
-      debug.fallbackNote = 'AI returned an unusable value for one or more sections (missing/empty/etc.). The server used robust fallbacks for those sections to avoid failing the whole resume.';
-    }
-    
-    // Save to history only if we have a meaningful title (prevents blank "name:" items)
-    try {
-      const historyTitle = buildHistoryTitle({ nickname, profile, jd: jdNormalized, finalJD });
-      if (historyTitle) {
-        const histNickname = String(nickname || profile?.nickname || profile?.fullName || 'anonymous').trim().toLowerCase();
-        const createdAt = new Date().toISOString();
-        const id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+     // Second-chance targeted generation for certs/achievements if the main JSON looks weak.
+     async function retryCriticalSection(pid, kind) {
+       try {
+         const seed = requestSeed.toString(36);
+         const prompt = `You are a resume expert. Generate ONLY the ${kind} for this role/JD.
+JD: "${finalJD.slice(0, 800)}"
+RULES:
+- Return plain text only.
+- EXACTLY 2 items separated by " | ".
+- Must be realistic for freshers.
+- Achievements must be measurable (numbers/%/time saved).
+- Certifications must be REAL certification names.
+VARIATION_SEED: ${seed}:${pid}
+OUTPUT:`;
+         const txt = await callGeminiFlash(prompt, { temperature: 1.05, topP: 0.95, maxOutputTokens: 512 });
+         return String(txt || '').replace(/```/g, '').trim();
+       } catch (_) {
+         return '';
+       }
+     }
++
+      try {
+        if (!aiData) throw lastError || new Error('No AI data returned');
 
-        await saveHistory({
-          id,
-          nickname: histNickname,
-          title: historyTitle,
-          jd: jdNormalized,
-          finalJD,
-          html: htmlSkeleton,
-          createdAt,
-        });
-        debug.historySaved = true;
-      } else {
-        debug.historySaved = false;
-        debug.historySkipReason = 'empty-title';
-      }
-    } catch (e) {
-      debug.historySaved = false;
-      debug.historyError = String(e && e.message ? e.message : e);
-    }
+        Object.keys(aiPrompts).forEach(pid => {
+          let val = aiData[pid];
+          const type = aiTypes[pid];
+          const label = aiLabels[pid] || '';
 
-    // Guarantee profile education fields are reflected in HTML if the model omitted them
-    try {
-      const _p = (profile && typeof profile === 'object') ? profile : (body && body.profile ? body.profile : {});
-      if (typeof htmlSkeleton === 'string' && htmlSkeleton.trim()) {
-        htmlSkeleton = ensureEducationInHtml({ html: htmlSkeleton, profile: _p });
-      }
-    } catch (_) {}
+          // Lightweight validation to enforce prompt rules; fallback if validation fails
+          try {
+            let valid = true;
+            if (val && typeof val === 'string') {
+              if (type === 'summary') valid = validateSummary(val, rolePreset);
+              else if (type === 'chips' && label === 'Technical Skills') valid = validateSkills(val, finalJD);
+              else if (type === 'list' && label === 'Projects') valid = validateProjects(val, rolePreset);
+              else if (type === 'list' && label === 'Achievements') valid = validateAchievements(val);
+            } else {
+              valid = false;
+            }
 
-    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
+            // If AI returned invalid Achievements/Certifications, retry with a focused prompt once.
+            if (!valid && (label === 'Certifications' || label === 'Achievements')) {
+              debug.invalidAI[pid] = 'validation-failed';
+              // Note: forEach callback cannot be async; fall back to JD-derived generators instead.
+              if (label === 'Certifications') {
+                const items = jdDerivedCerts(finalJD, rand);
+                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, items.map(c => `<li>${escapeHtml(c)}</li>`).join(''));
+              } else {
+                const items = jdDerivedAchievements(finalJD, rand);
+                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, items.map(a => `<li>${escapeHtml(a)}</li>`).join(''));
+              }
+              debug.usedFallbackFor.push(pid);
+              return;
+            }
++
+            if (!valid) {
+              debug.invalidAI[pid] = 'validation-failed';
+              htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+              debug.usedFallbackFor.push(pid);
+              return;
+            }
+          } catch (vErr) {
+            // On any validator error, treat as invalid and fallback
+            debug.invalidAI[pid] = 'validation-exception';
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+            debug.usedFallbackFor.push(pid);
+            return;
+          }
 
+          // (type and label already declared above)
+          if (!val || typeof val !== 'string' || val.trim().length < 2) {
+            // Record why this section fell back (helps diagnose intermittent AI hiccups)
+            let reason = 'unknown';
+            if (val === undefined || val === null) reason = 'missing';
+            else if (typeof val !== 'string') reason = `non-string (${typeof val})`;
+            else if (typeof val === 'string' && val.trim().length < 2) reason = 'too-short/empty';
+            debug.invalidAI[pid] = reason;
+
+             const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
+             htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+             debug.usedFallbackFor.push(pid);
+             return;
+          }
+
+          // WORK EXPERIENCE bullets: pipe-separated list -> <li> items.
+          if (type === 'list' && label === 'Work Experience') {
+            const bullets = splitPipeBullets(val);
+            const cleaned = (bullets.length ? bullets : [String(val).trim()])
+              .map(b => stripRolePrefix(b, ''))
+              .map(b => b.replace(/\s+/g, ' ').trim())
+              .filter(Boolean)
+              .slice(0, 4);
+            const lis = cleaned.map(b => `<li>${escapeHtml(b)}</li>`).join('') || aiFallbacks[pid];
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+            return;
+          }
+
+          // CERTIFICATIONS (AI-first; JD-derived fallback only if AI output is incomplete)
+          if (type === 'list' && label === 'Certifications') {
+            let parts = String(val).split('|').map(b => b.trim()).filter(Boolean);
+            if (parts.length < 2) {
+              parts = parts.concat(jdDerivedCerts(finalJD, rand)).slice(0, 2);
+            } else {
+              parts = parts.slice(0, 2);
+            }
+            const lis = parts.map(b => `<li>${escapeHtml(b)}</li>`).join('');
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+            return;
+          }
+
+          // ACHIEVEMENTS (AI-first; JD-derived fallback only if AI output is incomplete)
+          if (type === 'list' && label === 'Achievements') {
+            let parts = String(val).split('|').map(b => b.trim()).filter(Boolean);
+            if (parts.length < 2) {
+              parts = parts.concat(jdDerivedAchievements(finalJD, rand)).slice(0, 2);
+            } else {
+              parts = parts.slice(0, 2);
+            }
+            const cleaned = parts.map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
+            const lis = cleaned.map(b => `<li>${escapeHtml(b)}</li>`).join('');
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+            return;
+          }
+
+          // SUMMARY - ensure contains tech
+         if (type === 'summary') {
+             let s = val.trim();
+             const techs = rolePreset.skills || [];
+             const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
+             if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
+             // Guaranteed visible variation
+             s = seededSynonymSwap(s, rand);
+             s = seededBumpMetric(s, rand);
+             htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
+             return;
+         }
+
+         // PROJECTS
+         if (type === 'list' && label === 'Projects') {
+             const lis = parseProjectsToLis(val, rolePreset, rand);
+             htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+              return;
+         }
+
+         // final fallback
+         htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+          debug.invalidAI[pid] = debug.invalidAI[pid] || 'post-parse fallback';
+          debug.usedFallbackFor.push(pid);
+       });
+     } catch (e) {
+         console.error('AI processing failed:', e);
+         if (aiOnly) {
+           const msg = String(e.message || 'AI failed');
+           if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+              const retryMs = parseRetryDelayMs(msg);
+              if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+              refundDailyTicket();
+              return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
+           }
+           return res.status(503).json({ ok: false, error: msg, debug });
+         }
+        // If quota/rate-limited, do not burn daily counter
+        {
+          const msg = String(e && e.message ? e.message : '');
+          if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+            const retryMs = parseRetryDelayMs(msg);
+            if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+            refundDailyTicket();
+          }
+        }
+         Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
+         // Ensure fallback still looks dynamic per request
+         htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
+     }
   } catch (err) {
+
+    console.error('[generate] error', err);
     return res.status(500).json({ error: err.message });
   }
 };
