@@ -1,6 +1,7 @@
 const { saveHistory } = require("./firebase");
 const crypto = require('crypto');
 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY || process.env.GCP_API_KEY;
 // --- PURE AI MODE GENERATOR ---
 
 // HTML escaping
@@ -72,8 +73,6 @@ function stripRolePrefix(bullet, roleTitle) {
 }
 
 // API Interaction
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-
 async function callGeminiFlash(promptText, opts = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
   const model = opts.model || 'models/gemini-1.5-flash';
@@ -185,6 +184,7 @@ Rules: Strictly follow JD requirements. Be specific. No generics.`;
 const { saveHistory } = require("./firebase");
 const crypto = require('crypto');
 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY || process.env.GCP_API_KEY;
 // --- PURE AI MODE GENERATOR ---
 
 // HTML escaping
@@ -256,8 +256,6 @@ function stripRolePrefix(bullet, roleTitle) {
 }
 
 // API Interaction
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-
 async function callGeminiFlash(promptText, opts = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
   const model = opts.model || 'models/gemini-1.5-flash';
