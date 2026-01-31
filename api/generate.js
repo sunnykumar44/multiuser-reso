@@ -1100,7 +1100,7 @@ VARIATION_SEED: ${seed}
           // also allow rolePreset matches
           techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
           // add random preset skills to reach minimum using shuffled presets
-          const shuffled = shuffle((rolePreset.skills || []).slice());
+          const shuffled = shuffleSeeded((rolePreset.skills || []).slice(), rand);
           for (const pick of shuffled) {
             if (techParts.length >= 12) break;
             const canonPick = normalizeSkillToken(pick);
