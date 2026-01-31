@@ -1233,7 +1233,6 @@ VARIATION_SEED: ${seed}
                 const msg = String(e && e.message ? e.message : '');
                 const retryMs = parseRetryDelayMs(msg);
                 if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
-                debug.attempts.push({ temp: t, parsed: false, error: msg });
 
                 // If Gemini is rate-limiting, don't spin; fall back immediately
                 if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
