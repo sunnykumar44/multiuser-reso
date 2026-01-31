@@ -203,14 +203,17 @@ function dynamicProjects(rolePreset, rand = Math.random) {
 function dynamicAchievements(rolePreset, rand = Math.random) {
   const ach = Array.isArray(rolePreset?.achievements) ? rolePreset.achievements : [];
   const picked = shuffleSeeded(ach.slice(), rand).slice(0, 2);
-  return picked.length ? picked : [`Improved performance by ${randomPercent(rand)}% through optimization`, `Automated repetitive tasks saving ${randomPercent(rand)}% time`];
+  return picked.length
+    ? picked
+    : [`Improved performance by ${randomPercent(rand)}% through optimization`, `Automated repetitive tasks saving ${randomPercent(rand)}% time`];
 }
 
 function dynamicExperienceBullet(title, rolePreset, rand = Math.random) {
   const skills = Array.isArray(rolePreset?.skills) ? rolePreset.skills : ['Python', 'SQL'];
   const tech = shuffleSeeded(skills.slice(), rand)[0] || 'relevant tools';
   const pct = randomPercent(rand, 10, 35);
-  return `${String(title || 'Role')} – Delivered role-aligned tasks using ${tech}, improving turnaround time by ~${pct}%.`;
+  // Start with an action verb; avoid repeating the role title in the bullet text.
+  return `Delivered role-aligned tasks using ${tech}, improving turnaround time by ~${pct}%.`;
 }
 
 function dynamicTraits(finalJD, rand = Math.random) {
@@ -1211,7 +1214,9 @@ OUTPUT: JSON only. No markdown.
                 // CERTIFICATIONS
                 if (type === 'list' && label === 'Certifications') {
                     let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    const certs = rotateBySeed(enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []), rand);
+                    // Prefer AI-provided certs, but force deterministic variation via seeded pick.
+                    const augmented = enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []);
+                    const certs = pickTwoSeededDistinct(augmented, rand, rolePreset.certs || ['PCEP – Certified Entry-Level Python Programmer']);
                     const lis = certs.map(b => `<li>${b}</li>`).join('');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     return;
@@ -1221,7 +1226,8 @@ OUTPUT: JSON only. No markdown.
                 if (type === 'list' && label === 'Achievements') {
                     let parts = val.split('|').map(b => b.trim()).filter(Boolean);
                     let achs = augmentAchievements(parts, rolePreset);
-                    achs = rotateBySeed(achs, rand).map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
+                    // Force deterministic variation and keep two distinct items
+                    achs = pickTwoSeededDistinct(achs, rand, rolePreset.achievements || []).map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
                     const lis = achs.map(b => `<li>${b}</li>`).join('');
                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
                     return;
