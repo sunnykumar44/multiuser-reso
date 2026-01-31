@@ -655,6 +655,9 @@ async function callGeminiFlash(promptText, opts = {}) {
       }
 
       // Optional single retry on 429 (rate limit) honoring retryDelay
+      if (resp.status === 429 && opts.noRetryOn429) {
+        throw new Error(`Gemini API failed 429: ${txt}`);
+      }
       if (resp.status === 429 && !opts.__retriedOnce) {
         const ms = parseRetryDelayMs(txt);
         if (ms > 0 && ms <= 30000) {
@@ -1214,11 +1217,12 @@ VARIATION_SEED: ${seed}
          const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
          let aiData = null;
          let lastError = null;
+         let rateLimited = false;
          for (const t of temps) {
             try {
                 const seed = requestSeed.toString(36);
                 const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
-                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, maxOutputTokens: 3000 });
+                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, maxOutputTokens: 3000, noRetryOn429: true });
                 try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
                 if (aiData) break;
             } catch (e) {
@@ -1234,9 +1238,17 @@ VARIATION_SEED: ${seed}
                 // If Gemini is rate-limiting, don't spin; fall back immediately
                 if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
                   refundDailyTicket();
+                  rateLimited = true;
                    break;
                  }
             }
+         }
+         if (rateLimited) {
+           return res.status(429).json({
+             ok: false,
+             error: 'Gemini quota/rate limit exceeded. Please wait and try again.',
+             debug
+           });
          }
 
          try {
