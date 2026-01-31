@@ -1,22 +1,504 @@
 const { saveHistory } = require("./firebase");
 const crypto = require('crypto');
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY || process.env.GCP_API_KEY;
+// Simple in-memory daily limiter (resets when date changes; per server instance)
 const DAILY_LIMIT = Number(process.env.DAILY_LIMIT || 20);
-
-// Global state for daily limit
 globalThis.__DAILY_LIMIT_STATE__ = globalThis.__DAILY_LIMIT_STATE__ || { date: null, byUser: new Map() };
 
-// --- HELPERS ---
-function escapeHtml(s = "") {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function todayUtc() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 }
 
-function todayUtc() { return new Date().toISOString().slice(0, 10); }
+function getUserKey(body, req) {
+  // Prefer explicit userId; else email; else nickname; else IP.
+  const p = (body && body.profile && typeof body.profile === 'object') ? body.profile : {};
+  return String(body?.userId || p.email || body?.nickname || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'anonymous');
+}
+
+function consumeOne(userKey) {
+  const state = globalThis.__DAILY_LIMIT_STATE__;
+  const d = todayUtc();
+  if (state.date !== d) {
+    state.date = d;
+    state.byUser = new Map();
+  }
+  const used = Number(state.byUser.get(userKey) || 0);
+  if (used >= DAILY_LIMIT) {
+    return { ok: false, remaining: 0, used, limit: DAILY_LIMIT, date: state.date, error: 'Daily limit reached' };
+  }
+  state.byUser.set(userKey, used + 1);
+  return { ok: true, remaining: DAILY_LIMIT - (used + 1), used: used + 1, limit: DAILY_LIMIT, date: state.date };
+}
+
+function getRemaining(userKey) {
+  const state = globalThis.__DAILY_LIMIT_STATE__;
+  const d = todayUtc();
+  if (state.date !== d) {
+    state.date = d;
+    state.byUser = new Map();
+  }
+  const used = Number(state.byUser.get(userKey) || 0);
+  return { remaining: Math.max(DAILY_LIMIT - used, 0), used, limit: DAILY_LIMIT, date: state.date };
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function parseRetryDelayMs(txt) {
+  try {
+    const m = String(txt || '').match(/"retryDelay"\s*:\s*"(\d+)s"/);
+    if (m && m[1]) return Number(m[1]) * 1000;
+    const m2 = String(txt || '').match(/retry in\s+(\d+)/i);
+    if (m2 && m2[1]) return Number(m2[1]) * 1000;
+    return 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+// --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
+// Extracts meaningful technical and soft skills from JD
+function extractKeywordsFromJD(jd, type = 'all') {
+  if (!jd || jd.trim().length < 20) {
+    // For very short JDs, use the words themselves
+    const words = jd.trim().split(/\s+/).filter(w => w.length > 2);
+    if (type === 'technical') return words.length ? words : ["Python", "SQL"];
+    if (type === 'soft') return ["Communication", "Teamwork"];
+    return words.length ? words : ["Technical"];
+  }
+  
+  const stopWords = new Set([
+    "and", "the", "for", "with", "ing", "to", "in", "a", "an", "of", "on", "at", "by", "is", "are", 
+    "was", "were", "be", "been", "job", "role", "work", "experience", "candidate", "ability", 
+    "knowledge", "looking", "seeking", "must", "have", "will", "can", "good", "strong", "years", 
+    "description", "required", "preferred", "should", "responsibilities", "requirements",
+    "analyst", "developer", "engineer", "manager", "specialist", "coordinator", "intern", "junior", "senior", "professional"
+  ]);
+
+  // EXPANDED Technical skill patterns (case-insensitive matching)
+  const text = jd.toLowerCase();
+  const technicalSkills = [];
+  
+  // Programming Languages
+  const languages = ["python", "java", "javascript", "typescript", "c++", "c#", "ruby", "php", "go", "rust", "scala", "kotlin", "swift", "r", "matlab", "perl", "shell", "bash"];
+  languages.forEach(lang => {
+    if (text.includes(lang)) technicalSkills.push(lang.charAt(0).toUpperCase() + lang.slice(1));
+  });
+  
+  // Frameworks & Libraries
+  const frameworks = ["react", "angular", "vue", "django", "flask", "spring", "node", "express", "rails", "laravel", "dotnet", ".net", "tensorflow", "pytorch", "pandas", "numpy", "scikit"];
+  frameworks.forEach(fw => {
+    if (text.includes(fw)) technicalSkills.push(fw.charAt(0).toUpperCase() + fw.slice(1));
+  });
+  
+  // Databases
+  const databases = ["sql", "mysql", "postgresql", "mongodb", "redis", "oracle", "cassandra", "dynamodb", "sqlite"];
+  databases.forEach(db => {
+    if (text.includes(db)) technicalSkills.push(db.toUpperCase());
+  });
+  
+  // Cloud & DevOps
+  const cloud = ["aws", "azure", "gcp", "docker", "kubernetes", "jenkins", "ci/cd", "terraform", "ansible"];
+  cloud.forEach(c => {
+    if (text.includes(c)) technicalSkills.push(c.toUpperCase());
+  });
+  
+  // Tools & Others
+  const tools = ["git", "jira", "linux", "api", "rest", "graphql", "oauth", "jwt", "microservices", "agile", "scrum", "tableau", "powerbi", "excel", "spark", "hadoop", "kafka"];
+  tools.forEach(t => {
+    if (text.includes(t)) technicalSkills.push(t.charAt(0).toUpperCase() + t.slice(1));
+  });
+
+  // Soft skills extraction
+  const softSkillPatterns = ["communication", "problem solving", "teamwork", "leadership", "analytical", "time management", "adaptability", "critical thinking", "collaboration", "attention to detail"];
+  const softSkills = [];
+  softSkillPatterns.forEach(skill => {
+    if (text.includes(skill.toLowerCase().replace(/\s+/g, ''))) {
+      softSkills.push(skill.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '));
+    }
+  });
+
+  // Remove duplicates
+  const uniqueTech = [...new Set(technicalSkills)];
+  const uniqueSoft = [...new Set(softSkills)];
+
+  if (type === 'technical') {
+    // If no tech skills found, extract ANY capitalized words or technical-sounding words
+    if (uniqueTech.length === 0) {
+      const words = jd.split(/\s+/);
+      words.forEach(w => {
+        const clean = w.replace(/[^a-zA-Z0-9+#]/g, '');
+        if (clean.length > 2 && !stopWords.has(clean.toLowerCase())) {
+          uniqueTech.push(clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase());
+        }
+      });
+    }
+    return uniqueTech.slice(0, 15);
+  }
+
+  if (type === 'soft') {
+    // Default soft skills if none found
+    if (uniqueSoft.length === 0) {
+      return ["Communication", "Problem Solving", "Teamwork", "Leadership", "Time Management", "Analytical Thinking"];
+    }
+    return uniqueSoft.slice(0, 8);
+  }
+
+  return [...uniqueTech, ...uniqueSoft].slice(0, 18);
+}
+
+// --- HELPER 2: DYNAMIC FALLBACK GENERATOR (100% JD-DERIVED) ---
+function getSmartFallback(section, jd, rand = Math.random) {
+  const rolePreset = getRolePreset(jd);
+  if (section === 'skills') {
+    let skills = extractKeywordsFromJD(jd, 'technical').slice(0, 6);
+    const pool = shuffleSeeded((rolePreset.skills || []).slice(), rand);
+    for (const p of pool) { if (skills.length >= 12) break; if (!skills.includes(p)) skills.push(p); }
+    return dedupeSkillsLike(skills);
+  }
+  if (section === 'certifications') return dynamicCerts(rolePreset, rand).join(' | ');
+  if (section === 'projects') return dynamicProjects(rolePreset, rand).join(' | ');
+  if (section === 'achievements') return dynamicAchievements(rolePreset, rand).join(' | ');
+  return "";
+}
+
+// --------------------
+// Fallback content builders (must never throw)
+// --------------------
+function randomPercent(rand = Math.random, min = 10, max = 40) {
+  return Math.floor(rand() * (max - min + 1)) + min;
+}
+
+function dynamicSummary(rolePreset, finalJD, rand = Math.random) {
+  try {
+    const role = String(finalJD || '').split(' with ')[0].trim() || 'the role';
+    const skills = Array.isArray(rolePreset?.skills) ? rolePreset.skills : ['Python', 'SQL', 'Git'];
+    const top = shuffleSeeded(skills.slice(), rand).slice(0, 4);
+    const pct = randomPercent(rand, 12, 35);
+    return `Entry-level candidate targeting ${role} roles with hands-on project experience and strong fundamentals in ${top.join(', ')}. Built resume-ready projects aligned to job requirements, focusing on clean implementation, debugging, and measurable outcomes. Demonstrated ability to learn quickly, collaborate effectively, and deliver improvements of ~${pct}% in efficiency/quality in simulated or academic work.`;
+  } catch (_) {
+    return 'Entry-level candidate with strong technical fundamentals and hands-on project experience aligned to the target role. Motivated, adaptable, and eager to contribute in a collaborative environment.';
+  }
+}
+
+function dynamicCerts(rolePreset, rand = Math.random) {
+  const certs = Array.isArray(rolePreset?.certs) ? rolePreset.certs : [];
+  const picked = shuffleSeeded(certs.slice(), rand).slice(0, 2);
+  return picked.length ? picked : ['PCEP – Certified Entry-Level Python Programmer'];
+}
+
+function dynamicProjects(rolePreset, rand = Math.random) {
+  const projs = Array.isArray(rolePreset?.projects) ? rolePreset.projects : [];
+  const picked = shuffleSeeded(projs.slice(), rand).slice(0, 2);
+  return picked.length ? picked : ['<b>Demo Project:</b> Built a role-aligned CRUD app with measurable improvements.'];
+}
+
+function dynamicAchievements(rolePreset, rand = Math.random) {
+  const ach = Array.isArray(rolePreset?.achievements) ? rolePreset.achievements : [];
+  const picked = shuffleSeeded(ach.slice(), rand).slice(0, 2);
+  return picked.length ? picked : [`Improved performance by ${randomPercent(rand)}% through optimization`, `Automated repetitive tasks saving ${randomPercent(rand)}% time`];
+}
+
+function dynamicExperienceBullet(title, rolePreset, rand = Math.random) {
+  const skills = Array.isArray(rolePreset?.skills) ? rolePreset.skills : ['Python', 'SQL'];
+  const tech = shuffleSeeded(skills.slice(), rand)[0] || 'relevant tools';
+  const pct = randomPercent(rand, 10, 35);
+  return `${String(title || 'Role')} – Delivered role-aligned tasks using ${tech}, improving turnaround time by ~${pct}%.`;
+}
+
+function dynamicTraits(finalJD, rand = Math.random) {
+  const fromJD = extractKeywordsFromJD(finalJD, 'soft');
+  const base = ['Communication', 'Teamwork', 'Problem Solving', 'Adaptability', 'Time Management', 'Attention to Detail'];
+  const merged = [...new Set([...fromJD, ...base])];
+  return shuffleSeeded(merged, rand).slice(0, 6);
+}
+
+// Ensure fallback HTML still gets lightweight variation and never throws
+function seededSynonymSwap(text, rand = Math.random) {
+  const s = String(text || '');
+  const swaps = [
+    [/(improved|improving)/gi, () => (rand() > 0.5 ? 'enhanced' : 'improved')],
+    [/(reduced|reducing)/gi, () => (rand() > 0.5 ? 'lowered' : 'reduced')],
+    [/(built)/gi, () => (rand() > 0.5 ? 'developed' : 'built')],
+    [/(created)/gi, () => (rand() > 0.5 ? 'implemented' : 'created')],
+  ];
+  let out = s;
+  for (const [re, rep] of swaps) out = out.replace(re, rep);
+  return out;
+}
+
+function seededBumpMetric(text, rand = Math.random) {
+  const s = String(text || '');
+  // If it already contains a %, keep it
+  if (/%/.test(s)) return s;
+  // Add a small metric sometimes
+  if (rand() < 0.35) return `${s} (~${randomPercent(rand, 10, 35)}% impact).`;
+  return s;
+}
+
+function applyGuaranteedVariationToFallback(html, rolePreset, rand = Math.random) {
+  try {
+    let out = String(html || '');
+    out = seededSynonymSwap(out, rand);
+    out = seededBumpMetric(out, rand);
+    return out;
+  } catch (_) {
+    return String(html || '');
+  }
+}
+
+function escapeHtml(s = "") {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Ensure Education shows college + branch + edu years from profile even if model omits them
+function ensureEducationInHtml({ html, profile } = {}) {
+  try {
+    const outHtml = String(html || '');
+    const p = (profile && typeof profile === 'object') ? profile : {};
+    const college = String(p.college || '').trim();
+    const branch = String(p.branch || '').trim();
+    const eduFrom = String(p.eduFrom || '').trim();
+    const eduTo = String(p.eduTo || '').trim();
+    const eduYears = [eduFrom, eduTo].filter(Boolean).join('–');
+
+    // If there is no usable education info, do nothing
+    if (!college && !branch && !eduYears) return outHtml;
+
+    // If AI output already contains branch or years, do nothing
+    const lower = outHtml.toLowerCase();
+    const hasBranch = branch && lower.includes(String(branch).toLowerCase());
+    const hasYears = eduYears && lower.includes(String(eduYears).toLowerCase());
+    if (hasBranch || hasYears) return outHtml;
+
+    // If it doesn't even mention Education, do nothing (avoid risky injection)
+    const hasEducationHeading = /education/i.test(outHtml);
+    if (!hasEducationHeading) return outHtml;
+
+    // Build a safe Education block that matches the server template class names
+    const eduLine2 = [branch, eduYears].filter(Boolean).join(' • ');
+    const injected = `
+<div class="resume-item">
+  <div class="resume-row">
+    <span class="resume-role">${escapeHtml(college || 'Education')}</span>
+    <span class="resume-date">${escapeHtml(eduYears || '')}</span>
+  </div>
+  ${branch ? `<span class="resume-company">${escapeHtml(branch)}</span>` : ''}
+</div>
+`;
+
+    // Try to insert right after the Education section title
+    // Pattern: <div class="resume-section-title">Education</div>
+    const re = /(<div\s+class="resume-section-title"[^>]*>\s*Education\s*<\/div>)/i;
+    if (re.test(outHtml)) {
+      return outHtml.replace(re, `$1${injected}`);
+    }
+
+    return outHtml;
+  } catch (_) {
+    return String(html || '');
+  }
+}
+
+// --- CONSTANTS ---
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY || process.env.GCP_API_KEY;
+// Optional: prefer a specific Gemini model first (e.g., "models/gemini-3-flash-preview")
+const GEMINI_MODEL_PREFERRED = (process.env.GEMINI_MODEL || process.env.GEMINI_PREFERRED_MODEL || '').trim();
+
+const RESUME_CSS = `
+  <style>
+    .generated-resume {
+      font-family: 'Helvetica', 'Arial', sans-serif;
+      line-height: 1.5;
+      color: #1e293b;
+      background: white;
+      padding: 20px;
+    }
+    .generated-resume * { box-sizing: border-box; }
+    .resume-header { text-align: center; margin-bottom: 20px; }
+    .resume-name { font-size: 28px; font-weight: 800; color: #1a365d; text-transform: uppercase; margin-bottom: 5px; }
+    .resume-contact { font-size: 11px; color: #4a5568; }
+    .resume-contact a { color: #2b6cb0; text-decoration: none; }
+    
+    .resume-section-title {
+      font-size: 13px; margin: 16px 0 8px; border-bottom: 1.5px solid #2b6cb0;
+      color: #1a365d; text-transform: uppercase; letter-spacing: 1px; font-weight: bold;
+    }
+    .resume-item { margin-bottom: 12px; font-size: 11px; }
+    .resume-row { display: flex; justify-content: space-between; align-items: baseline; width: 100%; }
+    .resume-role { font-weight: bold; color: #000; }
+    .resume-date { font-weight: bold; font-size: 10px; color: #000; }
+    .resume-company { font-style: italic; color: #444; margin-bottom: 2px; display: block; }
+    /* Lists should read like clean new lines (no bullet dots) */
+    .generated-resume ul { margin: 4px 0 0; padding: 0; list-style: none; }
+    .generated-resume li { margin: 0 0 4px 0; font-size: 11px; }
+    .generated-resume p { margin-bottom: 4px; font-size: 11px; text-align: justify; }
+    
+    .skill-tag {
+      display: inline-block; padding: 3px 8px; margin: 0 4px 4px 0;
+      border: 1px solid #cbd5e1; border-radius: 4px; background-color: #f8fafc;
+      font-size: 10px; font-weight: 600; color: #334155;
+    }
+
+    /* Mobile / small screens: prevent overlap and force wrapping */
+    @media (max-width: 520px) {
+      .generated-resume { padding: 14px; }
+      .resume-name { font-size: 22px; }
+      .resume-contact { font-size: 10px; line-height: 1.35; }
+      .resume-section-title { font-size: 12px; margin: 14px 0 8px; }
+      .resume-item, .generated-resume p, .generated-resume li { font-size: 10.5px; }
+
+      .resume-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+      }
+      .resume-date { font-size: 10px; }
+      .resume-role { word-break: break-word; }
+      .skill-tag { font-size: 9.5px; padding: 3px 7px; }
+    }
+  </style>
+`;
+
+// Role presets provide realistic, role-aligned seeds when JD is sparse
+const ROLE_PRESETS = {
+  'data engineer': {
+    skills: ['Python','SQL','Apache Spark','Airflow','ETL','Data Warehousing','BigQuery','AWS S3','Docker','Git'],
+    projects: [
+      '<b>Batch ETL Pipeline:</b> Built a Python + Airflow pipeline to ingest, validate, and load datasets into a warehouse. Improved data freshness by 30% and reduced manual effort.',
+      '<b>Spark Transformations:</b> Implemented Spark jobs for large-scale transformations and partitioning to reduce run time by 35%.'
+    ],
+    certs: ['Google Cloud Digital Leader','Microsoft Certified: Azure Data Fundamentals'],
+    achievements: ['Reduced pipeline failure rate by 25% via validation and retries','Optimized Spark transformations to cut processing time by 35%']
+  },
+  'software engineer': {
+    skills: ['Python','Java','JavaScript','REST APIs','SQL','Git','Docker','Linux','Microservices'],
+    projects: [
+      '<b>E-commerce API:</b> Built using Python, Django, PostgreSQL to handle product catalogs and orders. Achieved 99.9% uptime and 30% faster response times.',
+      '<b>Deployment Pipeline:</b> Implemented CI/CD with Jenkins and Docker to automate testing and deployment, reducing release time by 40%.'
+    ],
+    certs: ['Oracle Certified Associate, Java SE 11 Developer','AWS Certified Developer – Associate'],
+    achievements: ['Reduced API response time by 30% via caching','Automated builds saving 10 hours/week']
+  },
+  'python developer': {
+    skills: ['Python','Django','Flask','REST APIs','PostgreSQL','Pandas','Docker','Git'],
+    projects: ['<b>Weather App:</b> CLI built using Python and API integration to fetch and analyze weather data. | <b>Data Pipeline:</b> ETL pipeline using Pandas and PostgreSQL.'],
+    certs: ['PCEP – Certified Entry-Level Python Programmer','AWS Certified Cloud Practitioner'],
+    achievements: ['Improved data processing throughput by 25%','Reduced error rates via validation checks']
+  },
+  'java developer': {
+    skills: ['Java','Spring Boot','Hibernate','REST APIs','MySQL','Maven','Git'],
+    projects: ['<b>Employee Management:</b> Spring Boot app with REST APIs and MySQL backend. | <b>Inventory Service:</b> Microservice with Spring and Docker.'],
+    certs: ['Oracle Certified Associate, Java SE 11 Developer','OCP Java SE'],
+    achievements: ['Improved DB query performance by 40%','Delivered core feature ahead of schedule']
+  },
+  'data analyst': {
+    skills: ['SQL','Python','Pandas','NumPy','Tableau','Excel','PowerBI','Data Visualization'],
+    projects: ['<b>Sales Dashboard:</b> Built Tableau dashboards enabling 20% faster decisions. | <b>Data Cleaning Pipeline:</b> Used Python/Pandas to clean and standardize data.'],
+    certs: ['Google Data Analytics Professional Certificate','PCEP – Certified Entry-Level Python Programmer'],
+    achievements: ['Reduced reporting time by 50%','Improved dashboard adoption by 30%']
+  },
+  'middleware': {
+    skills: ['Apache Kafka','RabbitMQ','Java','Spring Boot','REST APIs','Microservices','Docker','Kubernetes'],
+    projects: ['<b>Message Broker:</b> Implemented Kafka-based message broker to handle 1000s msgs/sec. | <b>Integration Layer:</b> Built Spring Boot middleware integrating multiple services with retry/backoff.'],
+    certs: ['Confluent Certified Developer for Apache Kafka (CCDAK)','Oracle Java SE 11 Associate'],
+    achievements: ['Improved message throughput by 3x','Reduced integration failures by 40%']
+  },
+  'automation': {
+    skills: ['Selenium','Python','CI/CD','Jenkins','Docker','TestNG','API Testing','Git'],
+    projects: ['<b>Test Automation Suite:</b> Built Selenium + Python suite to automate regression testing reducing manual QA time. | <b>CI Integration:</b> Integrated tests in Jenkins pipeline to catch regressions early.'],
+    certs: ['ISTQB Foundation','PCEP – Certified Entry-Level Python Programmer'],
+    achievements: ['Reduced manual test time by 80%','Increased release confidence via automated tests']
+  },
+  'web developer': {
+    skills: ['HTML5','CSS3','JavaScript','React','REST APIs','Node.js','Git','Responsive Design'],
+    projects: ['<b>E-commerce Frontend:</b> Responsive React app with cart and checkout. | <b>Admin Dashboard:</b> Built with React and REST API integrations.'],
+    certs: ['FreeCodeCamp Front End Libraries Certification','Google Web Developer'],
+    achievements: ['Improved page load times by 35%','Increased conversion through UX fixes']
+  },
+  default: {
+    skills: ['Python','SQL','Git','REST APIs','Docker','Communication'],
+    projects: ['<b>Demo Project:</b> Built a simple CRUD service using core technologies relevant to the role. | <b>Tooling Project:</b> Automated routine tasks using scripts and CI.'],
+    certs: ['PCEP – Certified Entry-Level Python Programmer'],
+    achievements: ['Delivered project demonstrating technical fundamentals']
+  }
+};
+
+// Flatten tech tokens for validation
+const TECH_TOKENS = [
+  'python','java','javascript','typescript','c++','c#','ruby','php','go','rust','scala','kotlin','swift','r','matlab','perl','bash','django','flask','spring','react','angular','node','express','postgresql','mysql','mongodb','redis','aws','azure','gcp','docker','kubernetes','git','jenkins','terraform','pandas','numpy','tableau','powerbi','sql','rest','api','graphql','kafka','rabbitmq'
+];
+
+// Normalize common technical skill variants so we can dedupe better (e.g., "ETL" vs "ETL Processes")
+function normalizeSkillToken(s) {
+  const raw = String(s || '').trim();
+  if (!raw) return '';
+  const t = raw.toLowerCase();
+
+  // Canonicalize frequent variants
+  if (/^etl(\s+processes|\s+principles)?$/.test(t)) return 'ETL';
+  if (/^(version\s*control\s*\(git\)|git\s+version\s+control)$/.test(t)) return 'Git';
+  if (/^jupyter(\s+notebooks)?$/.test(t)) return 'Jupyter';
+  if (/^sql$/.test(t)) return 'SQL';
+  if (/^(postgresql|postgre\s*sql)$/.test(t)) return 'PostgreSQL';
+  if (/^mysql$/.test(t)) return 'MySQL';
+  if (/^aws\s*s3$/.test(t)) return 'AWS S3';
+  if (/^bigquery$/.test(t)) return 'BigQuery';
+  if (/^power\s*bi$/.test(t)) return 'Power BI';
+  if (/^java$/.test(t)) return 'Java';
+  if (/^python$/.test(t)) return 'Python';
+  if (/^numpy$/.test(t)) return 'NumPy';
+  if (/^pandas$/.test(t)) return 'Pandas';
+  if (/^git$/.test(t)) return 'Git';
+  if (/^docker$/.test(t)) return 'Docker';
+
+  // Title-case fallback
+  return raw.length <= 4 ? raw.toUpperCase() : raw;
+}
+
+function dedupeSkillsLike(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const x of (arr || [])) {
+    const canon = normalizeSkillToken(x);
+    if (!canon) continue;
+    const k = canon.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(canon);
+  }
+  return out;
+}
+
+function getRolePreset(jd) {
+  if (!jd || !jd.trim()) return ROLE_PRESETS['default'];
+  const text = jd.toLowerCase();
+  for (const key of Object.keys(ROLE_PRESETS)) {
+    if (key === 'default') continue;
+    if (text.includes(key) || text.includes(key.split(' ')[0])) return ROLE_PRESETS[key];
+  }
+  // fallback heuristics
+  if (text.includes('data engineer') || (text.includes('data') && (text.includes('pipeline') || text.includes('etl') || text.includes('warehouse')))) return ROLE_PRESETS['data engineer'];
+  if (text.includes('data')) return ROLE_PRESETS['data analyst'];
+  if (text.includes('middleware') || text.includes('broker')) return ROLE_PRESETS['middleware'];
+  if (text.includes('automation') || text.includes('qa') || text.includes('testing')) return ROLE_PRESETS['automation'];
+  if (text.includes('web') || text.includes('frontend') || text.includes('react')) return ROLE_PRESETS['web developer'];
+  if (text.includes('java')) return ROLE_PRESETS['java developer'];
+  if (text.includes('python')) return ROLE_PRESETS['python developer'];
+  return ROLE_PRESETS['software engineer'];
+}
+
+function isLikelyTechnical(token) {
+  if (!token || typeof token !== 'string') return false;
+  const t = token.toLowerCase();
+  if (TECH_TOKENS.some(tok => t.includes(tok))) return true;
+  // also accept patterns like 'react.js', 'node.js'
+  if (/\b(react|node|django|flask|spring)\b/.test(t)) return true;
+  return false;
+}
 
 function makeSeed() {
   const buf = crypto.randomBytes(8);
-  return (buf.readUInt32LE(0) ^ buf.readUInt32LE(4)) >>> 0;
+  return buf.readUInt32LE(0) ^ buf.readUInt32LE(4);
 }
 
 function mulberry32(seed) {
@@ -30,199 +512,794 @@ function mulberry32(seed) {
 }
 
 function shuffleSeeded(arr, rand) {
-  const out = [...arr];
-  for (let i = out.length - 1; i > 0; i--) {
+  for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
+    [arr[i], arr[j] ] = [arr[j], arr[i]];
   }
-  return out;
+  return arr;
 }
 
-function getUserKey(body, req) {
-  const p = (body && body.profile && typeof body.profile === 'object') ? body.profile : {};
-  return String(body?.userId || p.email || body?.nickname || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'anonymous');
+function randomFromSeeded(arr, rand) { return arr[Math.floor(rand() * arr.length)]; }
+function randomPercentSeeded(rand, min = 10, max = 40) { return Math.floor(rand() * (max - min + 1)) + min; }
+
+// Augment project text by inserting a role-relevant tech and a small measurable result
+function augmentProjectIfNeeded(text, rolePreset, rand = Math.random) {
+  // if text already mentions techs, return
+  if (isLikelyTechnical(text)) return text;
+  const tech = randomFromSeeded(rolePreset.skills || ['Python'], rand);
+  const pct = randomPercentSeeded(rand, 10, 40);
+  return `${text.trim()} Built using ${tech}. Achieved ~${pct}% improvement in relevant metric.`;
 }
 
-function consumeOne(userKey) {
-  const state = globalThis.__DAILY_LIMIT_STATE__;
-  const d = todayUtc();
-  if (state.date !== d) { state.date = d; state.byUser = new Map(); }
-  const used = Number(state.byUser.get(userKey) || 0);
-  if (used >= DAILY_LIMIT) return { ok: false, remaining: 0, used, limit: DAILY_LIMIT };
-  state.byUser.set(userKey, used + 1);
-  return { ok: true, remaining: DAILY_LIMIT - (used + 1), used: used + 1, limit: DAILY_LIMIT };
+// Augment a certification list to ensure real certs
+function augmentCerts(parts, rolePreset) {
+  const out = [];
+  for (const p of parts) {
+    const hasKnown = ['AWS','Oracle','PCEP','Microsoft','ISTQB','Confluent','Google'].some(t => p.toUpperCase().includes(t));
+    if (hasKnown) out.push(p);
+    else out.push(randomFrom(rolePreset.certs || ['PCEP – Certified Entry-Level Python Programmer']));
+  }
+  // ensure two certs
+  while (out.length < 2) out.push(randomFrom(rolePreset.certs || ['PCEP – Certified Entry-Level Python Programmer']));
+  return out.slice(0,2);
 }
 
-function refundDailyTicket(userKey) {
-  try {
-    const state = globalThis.__DAILY_LIMIT_STATE__;
-    const used = Number(state.byUser.get(userKey) || 0);
-    if (used > 0) state.byUser.set(userKey, used - 1);
-  } catch (_) {}
+// Augment achievements to include measurable numbers
+function augmentAchievements(parts, rolePreset) {
+  const out = [];
+  for (const p of parts) {
+    if (/%|\b(reduc|improv|increas|save|autom|improved|reduced)\b/i.test(p)) out.push(p);
+    else out.push(`${p} Improved performance by ${randomPercent()}%.`);
+  }
+  while (out.length < 2) out.push(randomFrom(rolePreset.achievements || ['Delivered project demonstrating technical fundamentals']));
+  return out.slice(0,2);
 }
 
-function seededSynonymSwap(text, rand) {
-  const swaps = [
-    [/(improved|improving)/gi, () => (rand() > 0.5 ? 'enhanced' : 'improved')],
-    [/(reduced|reducing)/gi, () => (rand() > 0.5 ? 'lowered' : 'reduced')],
-    [/(built)/gi, () => (rand() > 0.5 ? 'developed' : 'built')],
-    [/(created)/gi, () => (rand() > 0.5 ? 'implemented' : 'created')],
+async function callGeminiFlash(promptText, opts = {}) {
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
+
+  const base = `https://generativelanguage.googleapis.com/v1beta`;
+  const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+  // Cache model choice for this server instance to avoid ListModels on every request
+  globalThis.__GEMINI_TEXT_MODELS__ = globalThis.__GEMINI_TEXT_MODELS__ || null;
+
+  async function listModels() {
+    const resp = await fetch(`${base}/models?${keyQs}`, { method: 'GET' });
+    if (!resp.ok) return null;
+    const j = await resp.json().catch(() => null);
+    return j;
+  }
+
+  async function pickModels() {
+    const fallback = [
+      'models/gemini-1.5-flash-002',
+      'models/gemini-1.5-flash',
+      'models/gemini-1.5-pro',
+      'models/gemini-1.0-pro'
+    ];
+
+    // Put preferred model first if provided
+    const preferredFromEnv = GEMINI_MODEL_PREFERRED
+      ? (GEMINI_MODEL_PREFERRED.startsWith('models/') ? GEMINI_MODEL_PREFERRED : `models/${GEMINI_MODEL_PREFERRED}`)
+      : '';
+
+    if (Array.isArray(globalThis.__GEMINI_TEXT_MODELS__) && globalThis.__GEMINI_TEXT_MODELS__.length) {
+      return globalThis.__GEMINI_TEXT_MODELS__;
+    }
+
+    const j = await listModels();
+    const models = (j && Array.isArray(j.models)) ? j.models : [];
+    const names = models.map(m => m && m.name).filter(Boolean);
+    if (!names.length) {
+      const picked = preferredFromEnv ? [preferredFromEnv, ...fallback] : fallback;
+      globalThis.__GEMINI_TEXT_MODELS__ = picked;
+      return picked;
+    }
+
+    // Exclude image/vision models
+    const textOnly = names.filter(n => n.includes('gemini') && !n.includes('image') && !n.includes('vision'));
+    const preferred = textOnly.filter(n => n.includes('flash') || n.includes('pro'));
+    let picked = preferred.length ? preferred : (textOnly.length ? textOnly : fallback);
+    if (preferredFromEnv) {
+      // Ensure preferred model is tried first
+      picked = [preferredFromEnv, ...picked.filter(n => n !== preferredFromEnv)];
+    }
+
+    globalThis.__GEMINI_TEXT_MODELS__ = picked;
+    return picked;
+  }
+
+  const candidatesModels = await pickModels();
+
+  const temperature = (typeof opts.temperature === 'number') ? opts.temperature : 0.9;
+  const topP = (typeof opts.topP === 'number') ? opts.topP : 0.95;
+  const maxOutputTokens = opts.maxOutputTokens || 2600;
+
+  function buildBody(withPenalty) {
+    const gen = {
+      temperature,
+      topP,
+      maxOutputTokens,
+      responseMimeType: "application/json"
+    };
+
+    if (withPenalty) {
+      gen.presencePenalty = (typeof opts.presencePenalty === 'number') ? opts.presencePenalty : 0.6;
+      gen.frequencyPenalty = (typeof opts.frequencyPenalty === 'number') ? opts.frequencyPenalty : 0.4;
+    }
+
+    return {
+      contents: [{ parts: [{ text: promptText }] }],
+      generationConfig: gen
+    };
+  }
+
+  let lastErr = null;
+  for (const modelName of candidatesModels) {
+    const url = `${base}/${modelName}:generateContent?${keyQs}`;
+    const body = buildBody(!opts.__noPenalty);
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+
+      // If this model doesn't support penalties, retry once without penalties
+      if (resp.status === 400 && /Penalty is not enabled for this model/i.test(txt) && !opts.__noPenalty) {
+        return callGeminiFlash(promptText, Object.assign({}, opts, { __noPenalty: true }));
+      }
+
+      // Optional single retry on 429 (rate limit) honoring retryDelay
+      if (resp.status === 429 && !opts.__retriedOnce) {
+        const ms = parseRetryDelayMs(txt);
+        if (ms > 0 && ms <= 30000) {
+          await sleep(ms);
+          return callGeminiFlash(promptText, Object.assign({}, opts, { __retriedOnce: true }));
+        }
+      }
+
+      lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
+      continue;
+    }
+
+    const j = await resp.json();
+    const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!candidate) {
+      lastErr = new Error('No response from AI');
+      continue;
+    }
+    return candidate;
+  }
+
+  throw lastErr || new Error('Gemini API failed');
+}
+
+function normalizeJD(jdRaw = '') {
+  let s = String(jdRaw || '').trim();
+  if (!s) return '';
+  s = s.replace(/\s+/g, ' ');
+
+  // Common misspellings / variants for roles & skills
+  const map = [
+    // Very common typos
+    [/\bdevloper\b/gi, 'developer'],
+    [/\bjav\b/gi, 'java'],
+    [/\bjav\s+developer\b/gi, 'java developer'],
+    [/\bjava\s*devloper\b/gi, 'java developer'],
+    [/\bjav\s+devloper\b/gi, 'java developer'],
+
+    [/\bdata\s*analy(st|ts)\b/gi, 'data analyst'],
+    [/\bdata\s*analys(t|ts)\b/gi, 'data analyst'],
+    [/\bdata\s*analyst\b/gi, 'data analyst'],
+    [/\bjava\s*dev(eloper)?\b/gi, 'java developer'],
+    [/\bpy(thon)?\s*dev(eloper)?\b/gi, 'python developer'],
+    [/\bsoftw(are)?\s*eng(ineer)?\b/gi, 'software engineer'],
+    [/\bweb\s*dev(eloper)?\b/gi, 'web developer'],
+    [/\bmid(?:dle)?\s*ware\b/gi, 'middleware'],
+
+    // Tech typos
+    [/\bpostgre\s*sql\b/gi, 'PostgreSQL'],
+    [/\bpostgress\b/gi, 'PostgreSQL'],
+    [/\bjavscript\b/gi, 'JavaScript'],
+    [/\btype\s*script\b/gi, 'TypeScript'],
+    [/\bpower\s*bi\b/gi, 'PowerBI'],
+    [/\btablue\b/gi, 'Tableau'],
+    [/\bexcell\b/gi, 'Excel'],
+    [/\bscikit\s*learn\b/gi, 'Scikit-learn'],
+    [/\bjup(y)?ter\b/gi, 'Jupyter'],
+    [/\brest\s*api\b/gi, 'REST APIs'],
   ];
-  let out = String(text || '');
-  for (const [re, rep] of swaps) out = out.replace(re, rep);
-  return out;
-}
 
-function seededBumpMetric(text, rand) {
-  const s = String(text || '');
-  if (/%/.test(s)) return s;
-  if (rand() < 0.35) return `${s} (~${Math.floor(rand() * 25) + 10}% impact).`;
+  for (const [re, rep] of map) s = s.replace(re, rep);
   return s;
 }
 
-function splitPipeBullets(val) {
-  return String(val || '').split('|').map(s => s.trim()).filter(Boolean);
+function looksLikeGarbageJD(s) {
+  const t = String(s || '').trim();
+  if (!t) return true;
+  if (t.length < 6) return true;
+  const letters = (t.match(/[a-z]/gi) || []).length;
+  const spaces = (t.match(/\s/g) || []).length;
+  const words = t.split(/\s+/).filter(Boolean);
+  const avgWord = words.length ? (t.replace(/\s+/g, '').length / words.length) : t.length;
+  const nonAlphaNum = (t.match(/[^a-z0-9\s]/gi) || []).length;
+
+  // Heuristics for nonsense: very long single token / low spaces, lots of symbols, weird word lengths
+  if (words.length <= 1 && t.length >= 12) return true;
+  if (spaces === 0 && t.length >= 10) return true;
+  if (letters / Math.max(t.length, 1) < 0.55) return true;
+  if (nonAlphaNum / Math.max(t.length, 1) > 0.25) return true;
+  if (avgWord > 14) return true;
+  return false;
 }
 
-function stripRolePrefix(bullet, roleTitle) {
-  const b = String(bullet || '').trim();
-  const role = String(roleTitle || '').trim();
-  if (!b || !role) return b;
-  const re = new RegExp('^' + role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[–-:]\\s*', 'i');
-  return b.replace(re, '').trim();
+function inferRoleFromProfile(profile = {}) {
+  const skills = Array.isArray(profile.skills) ? profile.skills.map(s => String(s).toLowerCase()) : [];
+  const exp = Array.isArray(profile.customSections) ? JSON.stringify(profile.customSections).toLowerCase() : '';
+
+  const has = (k) => skills.some(s => s.includes(k)) || exp.includes(k);
+
+  if (has('tableau') || has('powerbi') || has('excel') || has('pandas') || has('numpy') || has('sql')) return 'data analyst';
+  if (has('spark') || has('airflow') || has('etl') || has('warehouse') || has('bigquery')) return 'data engineer';
+  if (has('spring') || has('hibernate') || has('java')) return 'java developer';
+  if (has('django') || has('flask') || has('python')) return 'python developer';
+  if (has('react') || has('frontend') || has('node') || has('javascript')) return 'web developer';
+  return 'software engineer';
 }
 
-function isLikelyTechnical(token) {
-  const techs = ['python','java','sql','airflow','etl','spark','docker','aws','gcp','bigquery','tableau','react','node','git','pandas','numpy','scikit'];
-  const t = String(token).toLowerCase();
-  return techs.some(k => t.includes(k));
-}
+// Helper to normalize arbitrary section titles into canonical buckets (hoisted function)
+function canonicalSectionName(name) {
+  const s = String(name || '').trim().toLowerCase();
+  if (!s) return '';
+  if (s.includes('work') || s.includes('experience') || s.includes('employment')) return 'Work Experience';
+  if (s.includes('project')) return 'Projects';
+  if (s.includes('technical') || s.includes('skill')) return 'Technical Skills';
+  if (s.includes('summary')) return 'Summary';
+  if (s.includes('education') || s.includes('college') || s.includes('degree')) return 'Education';
+  if (s.includes('cert') || s.includes('certificate')) return 'Certifications';
+  if (s.includes('achieve') || s.includes('award')) return 'Achievements';
+  if (s.includes('trait') || s.includes('character') || s.includes('soft')) return 'Character Traits';
+  // default: title-case the input for display
+  return String(name || '').trim().replace(/\s+/g, ' ').replace(/(^|\s)\S/g, l => l.toUpperCase());
+};
 
-// Validation logic
-function validateSummary(text) { return text && text.trim().length > 30; }
-function validateSkills(val) {
-  const parts = String(val).split(/[,|\n]+/).filter(Boolean);
-  return parts.length >= 6 && parts.filter(isLikelyTechnical).length >= 3;
-}
-function validateProjects(val) {
-  return String(val).split('|').length >= 2 || String(val).includes('<li>');
-}
-function validateAchievements(val) {
-  return /\d+%|\b\d+\b/.test(String(val)) || /\b(improv|reduc|automat|saved)\b/i.test(String(val));
-}
-
-// AI Callers
-async function callGeminiFlash(promptText, opts = {}) {
-  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-  const body = {
-    contents: [{ parts: [{ text: promptText }] }],
-    generationConfig: {
-      temperature: opts.temperature || 0.9,
-      responseMimeType: "application/json"
-    }
-  };
-  const resp = await fetch(url, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
-  if (!resp.ok) throw new Error(`AI Error ${resp.status}`);
-  const j = await resp.json();
-  const txt = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!txt) throw new Error('Empty AI response');
-  return txt;
-}
-
-async function retryCriticalSection(kind, jd) {
-  try {
-    const prompt = `Generate exactly 2 realistic ${kind} for a fresher resume matching this JD: "${jd.slice(0,500)}". Return plain text separated by " | ". MUST be specific and professional.`;
-    const resp = await callGeminiFlash(prompt, { temperature: 1.0 });
-    return resp.replace(/```json|```/g, '').trim();
-  } catch (_) { return ''; }
-}
-
-// --- MAIN HANDLER ---
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(204).end();
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  if (req.method === "OPTIONS") return res.status(204).end();
 
   try {
-    const requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16)}`;
-    const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-    const { profile = {}, jd = '', scope = [] } = body;
-
-    if (!jd || jd.length < 5) return res.status(400).json({ ok: false, error: 'JD missing' });
-
-    const userKey = getUserKey(body, req);
-    const ticket = consumeOne(userKey);
-    if (!ticket.ok) return res.status(429).json({ ok: false, error: 'Daily limit reached', debug: { daily: ticket } });
-
     const requestSeed = makeSeed();
     const rand = mulberry32(requestSeed);
-    const sections = scope.length ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Certifications', 'Achievements', 'Character Traits'];
+    const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+    const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
+    const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
 
-    const mainPrompt = `Generate a resume in JSON format for this candidate profile: ${JSON.stringify(profile)} 
-    strictly matching this Job Description: "${jd}".
-    REQUIRED KEYS: summary (3 sentences), skills (10-15 comma separated), experience (2 bullets pipe separated), projects (2 items pipe separated), certifications (2 items pipe separated), achievements (2 items pipe separated), traits (6 comma separated).
-    Output valid JSON only.`;
+    // Normalize and dedupe incoming skills ("Python pre-processing" but on the server)
+    if (profile && Array.isArray(profile.skills)) {
+      profile.skills = dedupeSkillsLike(profile.skills);
+    } else if (profile && typeof profile.skills === 'string') {
+      profile.skills = dedupeSkillsLike(profile.skills.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean));
+    }
 
-    let aiData = null;
+    // Normalize JD to handle typos before any logic
+    let jdNormalized = normalizeJD(jd);
+    let jdWasInferred = false;
+    if (looksLikeGarbageJD(jdNormalized)) {
+      const inferredRole = inferRoleFromProfile(profile);
+      jdNormalized = inferredRole;
+      jdWasInferred = true;
+    }
+
+    const userKey = getUserKey({ ...body, profile }, req);
+    const remainingInfo = getRemaining(userKey);
+
+    if (!jdNormalized || typeof jdNormalized !== 'string' || !jdNormalized.trim()) {
+      return res.status(400).json({ ok: false, error: 'Missing required field: jd', debug: { requestSeed, aiEnabled: !!GEMINI_API_KEY, aiOnly, daily: remainingInfo } });
+    }
+
+    const name = (profile.fullName || nickname || "User").toUpperCase();
+    const contactLinks = [
+      profile.email ? `<a href="mailto:${profile.email}">${profile.email}</a>` : null,
+      profile.phone,
+      profile.linkedin ? `<a href="${profile.linkedin}">LinkedIn</a>` : null,
+      profile.github ? `<a href="${profile.github}">GitHub</a>` : null,
+    ].filter(Boolean).join(" | ");
+
+    let resumeBodyHtml = "";
+    const aiPrompts = {}; 
+    const aiFallbacks = {}; 
+    const aiTypes = {}; 
+    const aiLabels = {};
+    let sectionCounter = 0;
+
+    // CRITICAL FIX: Expand short JDs before building sections
+    const finalJD = (() => {
+      if (!jdNormalized || jdNormalized.trim().length < 50) {
+        const role = (jdNormalized || '').trim().toLowerCase();
+        if (role.includes('software') || role.includes('developer')) {
+          return `${jdNormalized} with experience in Python, Java, JavaScript, REST APIs, SQL databases, Git version control, and Agile methodology. Strong problem-solving and communication skills required.`;
+        } else if (role.includes('data')) {
+          return `${jdNormalized} with proficiency in Python, SQL, Pandas, NumPy, Tableau, Excel, and data visualization. Strong analytical and communication skills.`;
+        } else if (role.includes('web')) {
+          return `${jdNormalized} with knowledge of HTML, CSS, JavaScript, React, Node.js, REST APIs, MongoDB, and Git.`;
+        } else if (role.includes('java')) {
+          return `${jdNormalized} with Spring Boot, Hibernate, MySQL, REST APIs, Maven, Jenkins, and Git experience.`;
+        } else if (jdNormalized && jdNormalized.trim().length > 0) {
+          return `${jdNormalized} with relevant technical skills, programming languages, frameworks, databases, and strong problem-solving abilities.`;
+        }
+      }
+      return jdNormalized || '';
+    })();
+
+    // Role preset for strong deterministic fallbacks and validation
+    const rolePreset = getRolePreset(finalJD);
+    
+    // Map pid -> section label for validation later
+    const seen = new Set();
+    const sectionsToRender = [];
+    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Certifications', 'Achievements', 'Character Traits'];
+    
+    for (const s of rawScope) {
+        const c = canonicalSectionName(s);
+        if (!seen.has(c)) {
+            seen.add(c);
+            sectionsToRender.push({ original: s, canonical: c });
+        }
+    }
+
+    const priority = ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Certifications', 'Achievements', 'Character Traits'];
+    sectionsToRender.sort((a, b) => {
+        const ia = priority.indexOf(a.canonical);
+        const ib = priority.indexOf(b.canonical);
+        if (ia !== -1 && ib !== -1) return ia - ib;
+        if (ia !== -1) return -1;
+        if (ib !== -1) return 1;
+        return 0;
+    });
+
+    for (const secObj of sectionsToRender) {
+        const label = secObj.canonical;
+        
+        if (label === 'Summary') {
+            resumeBodyHtml += `<div class="resume-section-title">Summary</div>`;
+            const pid = `sec_${sectionCounter++}`;
+            const original = profile.summary || "";
+            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
+            
+            aiPrompts[pid] = `MANDATORY: Write a professional 3-4 sentence Summary for a FRESHER applying to: "${finalJD.slice(0,200)}". RULES: (1) Mention key technical skills inferred from role (2) Highlight project experience (3) Show eagerness to contribute (4) NO generic statements. Use ONLY job-relevant keywords. NEVER skip this.`;
+            // Fallback uses first JD keyword
+            const kw = extractKeywordsFromJD(jd, 'technical')[0] || jd.trim().split(' ')[0] || "Technical";
+            const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 3).join(', ');
+            aiFallbacks[pid] = `<p>${escapeHtml(dynamicSummary(rolePreset, finalJD, rand))}</p>`;
+            aiTypes[pid] = 'summary';
+            aiLabels[pid] = 'Summary';
+         }
+        else if (label === 'Technical Skills') {
+            resumeBodyHtml += `<div class="resume-section-title">Technical Skills</div>`;
+            const pid = `sec_${sectionCounter++}`;
+            const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
+            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
+            
+            aiPrompts[pid] = `INTELLIGENT SKILL INFERENCE: Based on role "${finalJD.slice(0, 100)}", infer 10-15 TECHNICAL skills that are: (1) Standard for this role (2) Include programming languages, frameworks, databases, tools (3) NOT copied verbatim from JD (4) Realistic for entry-level. User has: ${userSkills.join(',')}. Include them if relevant. Return comma-separated. Minimum 8 technical skills.`;
+            
+            // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 8
+            const dynamicSkills = getSmartFallback('skills', finalJD, rand);
+            const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
+            let combined = dedupeSkillsLike([...relevantUserSkills, ...dynamicSkills]);
+            
+             // Ensure minimum 8 technical skills
+             while (combined.length < 8) {
+               const extra = extractKeywordsFromJD(jd, 'technical')[combined.length];
+               if (extra) {
+                 const next = normalizeSkillToken(extra);
+                 if (next && !combined.some(x => x.toLowerCase() === next.toLowerCase())) combined.push(next);
+               }
+               else break;
+             }
+             
+            combined = dedupeSkillsLike(combined).slice(0, 15);
+            aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
+            aiTypes[pid] = 'chips';
+            aiLabels[pid] = 'Technical Skills';
+         }
+        else if (label === 'Work Experience') {
+            const experienceSections = (profile.customSections || [])
+               .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')));
+            
+            // Dedupe
+            const uniqueItems = new Map();
+            if (experienceSections.length > 0) {
+                 experienceSections.forEach(sec => {
+                     (sec.items || []).forEach(item => {
+                         if (!uniqueItems.has(item.key)) uniqueItems.set(item.key, { item, secTitle: sec.title });
+                     });
+                 });
+            }
+
+            if (uniqueItems.size > 0) {
+                resumeBodyHtml += `<div class="resume-section-title">Work Experience</div>`;
+                for (const [key, data] of uniqueItems.entries()) {
+                    const { item, secTitle } = data;
+                    const pid = `sec_${sectionCounter++}`;
+                    let companyName = secTitle.toLowerCase().includes('experience') ? "" : secTitle;
+                    resumeBodyHtml += `
+                      <div class="resume-item">
+                        <div class="resume-row"><span class="resume-role">${escapeHtml(item.key)}</span><span class="resume-date">${escapeHtml(item.date || '')}</span></div>
+                        ${companyName ? `<span class="resume-company">${escapeHtml(companyName)}</span>` : ''}
+                        <ul id="${pid}">[${pid}]</ul>
+                      </div>`;
+                    aiPrompts[pid] = `MANDATORY: Rewrite experience bullet for role "${item.key}" to include keywords from: "${finalJD.slice(0,200)}". Format: 2 concise Pipe-separated bullets showing impact.`;
+                    aiFallbacks[pid] = `<li>${escapeHtml(dynamicExperienceBullet(item.key, rolePreset, rand))}</li>`;
+                    aiTypes[pid] = 'list';
+                    aiLabels[pid] = 'Work Experience';
+                 }
+            }
+        }
+        else if (label === 'Projects') {
+             resumeBodyHtml += `<div class="resume-section-title">Projects</div>`;
+             const pid = `sec_${sectionCounter++}`;
+             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
+             
+             const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
+             if (projSec && projSec.items && projSec.items.length) {
+                  const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
+                  aiPrompts[pid] = `INTELLIGENT PROJECT GENERATION: Rewrite 2 projects that MUST: (1) Use technical skills from role "${finalJD.slice(0,100)}" (2) Solve real problems (3) Show measurable impact. CRITICAL VARIETY: pick TWO DIFFERENT domains/industries from this set: FinTech, Healthcare, Retail, Logistics, Manufacturing, Education, Telecom, Travel, Energy. Do NOT use the same domain twice. Avoid repeating common topics like "sales dashboard" and "customer churn" unless explicitly in the input. Input: "${inputs}". Format: "<b>Project Title with Tech Stack:</b> Description with technologies and outcome | <b>Title:</b> Description". Make them connected to the role.`;
+                  aiLabels[pid] = 'Projects';
+             } else {
+                  aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${finalJD.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used (4) MUST include measurable outcome. CRITICAL VARIETY: pick TWO DIFFERENT industries/domains from: FinTech, Healthcare, Retail, Logistics, Manufacturing, Education, Telecom, Travel, Energy. Do NOT use the same domain twice. Avoid defaulting to "Sales" or "Customer Churn" topics. Format: "<b>Project Name (Domain + Tech Stack):</b> Description with technologies and outcome | <b>Project 2 (Domain + Tech Stack):</b> Description". Entry-level appropriate.`;
+                  aiLabels[pid] = 'Projects';
+             }
+             // Dynamic Fallback
+             aiFallbacks[pid] = getSmartFallback('projects', finalJD, rand).split('|').map(p => `<li>${p.trim()}</li>`).join('');
+             aiTypes[pid] = 'list';
+        }
+        else if (label === 'Education') {
+             resumeBodyHtml += `<div class="resume-section-title">Education</div>`;
+             const eduList = (profile.education && profile.education.length) ? profile.education : (profile.college ? [profile.college] : []);
+             resumeBodyHtml += `<div class="resume-item">`;
+             if (eduList.length > 0) resumeBodyHtml += eduList.map(e => `<div>${escapeHtml(e)}</div>`).join('');
+             else resumeBodyHtml += `<div><i>(Add Education)</i></div>`;
+             resumeBodyHtml += `</div>`;
+        }
+        else if (label === 'Certifications') {
+            resumeBodyHtml += `<div class="resume-section-title">Certifications</div>`;
+            const pid = `sec_${sectionCounter++}`;
+            resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
+            aiPrompts[pid] = `INTELLIGENT CERTIFICATION GENERATION for "${finalJD.slice(0, 100)}" role. Generate 2 REAL, FULL certification names that: (1) Match the technical skills (2) Are industry-standard (3) Appropriate for entry-level. Examples: "AWS Certified Cloud Practitioner", "Oracle Certified Associate, Java SE 11 Developer", "Microsoft Certified: Azure Fundamentals", "PCEP – Certified Entry-Level Python Programmer". Format: "Full Cert Name | Full Cert Name". NO generic names.`;
+            aiFallbacks[pid] = getSmartFallback('certifications', finalJD, rand).split('|').map(c => `<li>${c.trim()}</li>`).join('');
+            aiTypes[pid] = 'list';
+            aiLabels[pid] = 'Certifications';
+        }
+        else if (label === 'Achievements') {
+            resumeBodyHtml += `<div class="resume-section-title">Achievements</div>`;
+            const pid = `sec_${sectionCounter++}`;
+            resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
+            aiPrompts[pid] = `INTELLIGENT ACHIEVEMENT GENERATION for "${finalJD.slice(0, 100)}" role. Create 2 SPECIFIC, MEASURABLE achievements that: (1) Use technical skills (2) Show quantifiable results (3) Are realistic for freshers. Examples: "Reduced API response time by 35% through caching optimization", "Automated data processing pipeline saving 20 hours/week", "Improved code test coverage from 60% to 85%". Format: "Achievement 1 | Achievement 2". NO generic statements.`;
+            aiFallbacks[pid] = getSmartFallback('achievements', finalJD, rand).split('|').map(a => `<li>${a.trim()}</li>`).join('');
+            aiTypes[pid] = 'list';
+            aiLabels[pid] = 'Achievements';
+        }
+         else {
+            resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
+            const pid = `sec_${sectionCounter++}`;
+            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
+            aiPrompts[pid] = `List 6-8 SOFT SKILLS/character traits from this JD: "${finalJD.slice(0,200)}". Examples: Communication, Teamwork, Leadership, Problem Solving. Comma-separated. NO technical skills. Minimum 6.`;
+            
+            // Dynamic Traits from JD SOFT SKILL Keywords - ensure minimum 6
+            let kws = dynamicTraits(finalJD, rand);
+            const fallbackStr = kws.join(' | ');
+            aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
+            aiTypes[pid] = 'chips';
+            aiLabels[pid] = secObj.original;
+         }
+     }
+
+    let htmlSkeleton = `
+    <div class="generated-resume">
+      ${RESUME_CSS}
+      <div class="resume-header">
+        <div class="resume-name">${escapeHtml(name)}</div>
+        <div class="resume-contact">${contactLinks}</div>
+      </div>
+      ${resumeBodyHtml}
+    </div>`;
+
+    // 3. CALL AI (finalJD already declared above)
+    const debug = { attempts: [], usedFallbackFor: [], invalidAI: {}, fallbackNote: '', retryAfterSeconds: 0, finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized };
+
+    // Build intelligentPrompt (required for AI path)
+    const intelligentPrompt = `
+You are an EXPERT RESUME INTELLIGENCE ENGINE.
+
+PRIMARY OBJECTIVE: Generate a complete, ATS-friendly resume where ALL sections are connected and role-aligned.
+
+JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1200)}"
+USER PROFILE (may be partial): ${JSON.stringify(profile).slice(0, 1500)}
+
+STRICT VARIATION REQUIREMENTS:
+- Every generation MUST be meaningfully different in wording and examples.
+- Use VARIATION_SEED to pick different examples, metrics, and ordering.
+- Do NOT repeat the same certification twice.
+- Do NOT duplicate the same skill token.
+- Projects must be different from each other (different problem + dataset + technique).
+- Achievements must be different from each other and include measurable numbers.
+- Character Traits: return 6 distinct soft skills.
+
+RULES:
+1) SUMMARY IS MANDATORY.
+2) Infer role-appropriate technical skills; do not copy JD verbatim.
+3) Skills must be used in Projects; Projects support Experience; Certs match Skills; Achievements come from Projects/Experience.
+4) Return VALID JSON ONLY with these keys: ${Object.keys(aiPrompts).join(', ')}
+
+SECTION INSTRUCTIONS:
+${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v} || VARIATION_NONCE:${requestSeed}:${k}`).join('\n')}
+
+OUTPUT: JSON only. No markdown.
+`;
+
+    if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
+        // Enforce local daily limit only when AI is requested
+        const ticket = consumeOne(userKey);
+        debug.daily = ticket;
+        if (!ticket.ok) {
+          return res.status(429).json({
+            ok: false,
+            error: `Daily limit reached (${ticket.limit}/day). Try again after UTC reset.`,
+            debug
+          });
+        }
+
+        // Allow refunding daily ticket if Gemini quota blocks the request (429)
+        const refundDailyTicket = () => {
+          try {
+            const state = globalThis.__DAILY_LIMIT_STATE__;
+            if (!state || !state.byUser) return;
+            const used = Number(state.byUser.get(userKey) || 0);
+            if (used > 0) state.byUser.set(userKey, used - 1);
+          } catch (_) {}
+        };
+
+         // try AI with retries for short JD to encourage variability
+         const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
+         let aiData = null;
+         let lastError = null;
+         for (const t of temps) {
+            try {
+                const seed = requestSeed.toString(36);
+                const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
+                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, maxOutputTokens: 3000 });
+                try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
+                if (aiData) break;
+            } catch (e) {
+                lastError = e;
+                debug.attempts.push({ temp: t, parsed: false, error: e.message });
+
+                // If Gemini is rate-limiting, don't spin; fall back immediately
+                const msg = String(e && e.message ? e.message : '');
+                const retryMs = parseRetryDelayMs(msg);
+                if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+                debug.attempts.push({ temp: t, parsed: false, error: msg });
+
+                // If Gemini is rate-limiting, don't spin; fall back immediately
+                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+                  refundDailyTicket();
+                   break;
+                 }
+            }
+         }
+
+         try {
+             if (!aiData) throw lastError || new Error('No AI data returned');
+
+             Object.keys(aiPrompts).forEach(pid => {
+                 let val = aiData[pid];
+                 const type = aiTypes[pid];
+                 const label = aiLabels[pid] || '';
+                 if (!val || typeof val !== 'string' || val.trim().length < 2) {
+                     // Record why this section fell back (helps diagnose intermittent AI hiccups)
+                     let reason = 'unknown';
+                     if (val === undefined || val === null) reason = 'missing';
+                     else if (typeof val !== 'string') reason = `non-string (${typeof val})`;
+                     else if (typeof val === 'string' && val.trim().length < 2) reason = 'too-short/empty';
+                     debug.invalidAI[pid] = reason;
+
+                      const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
+                      htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+                      debug.usedFallbackFor.push(pid);
+                      return;
+                  }
+
+                  // SKILLS: augment instead of replacing completely
+                if (type === 'chips' && label === 'Technical Skills') {
+                    let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+                    parts = parts.map(normalizeSkillToken).filter(Boolean);
+                     // keep only likely technical tokens, else augment
+                    let techParts = parts.filter(p => isLikelyTechnical(p));
+                    // also allow rolePreset matches
+                    techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
+                    // add random preset skills to reach minimum using shuffled presets
+                    const shuffled = shuffle((rolePreset.skills || []).slice());
+                    for (const pick of shuffled) {
+                      if (techParts.length >= 12) break;
+                      const canonPick = normalizeSkillToken(pick);
+                      if (canonPick && !techParts.some(x => x.toLowerCase() === canonPick.toLowerCase())) techParts.push(canonPick);
+                    }
+
+                    techParts = dedupeSkillsLike(techParts);
+                     // Reorder with request-seeded randomness so even similar sets render differently
+                     techParts = shuffleSeeded(techParts, rand);
+                     if (techParts.length < 8) {
+                       // fallback using dynamic fallback
+                       const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
+                       htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+                       debug.usedFallbackFor.push(pid);
+                       return;
+                     }
+                     const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                     return;
+                }
+
+                // TRAITS (soft chips)
+                if (type === 'chips' && label && label.toLowerCase().includes('character')) {
+                    let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+                    let soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,12);
+                    const extras = extractKeywordsFromJD(finalJD, 'soft');
+                    soft = enforceNDistinct(soft, 6, extras.concat(['Ownership','Curiosity','Learning Agility','Collaboration','Time Management','Adaptability','Attention to Detail']));
+                    const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+                    return;
+                }
+
+                // CERTIFICATIONS
+                if (type === 'list' && label === 'Certifications') {
+                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
+                    const certs = rotateBySeed(enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []), rand);
+                    const lis = certs.map(b => `<li>${b}</li>`).join('');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                    return;
+                }
+
+                // ACHIEVEMENTS
+                if (type === 'list' && label === 'Achievements') {
+                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
+                    let achs = augmentAchievements(parts, rolePreset);
+                    achs = rotateBySeed(achs, rand).map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
+                    const lis = achs.map(b => `<li>${b}</li>`).join('');
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                    return;
+                }
+
+                // SUMMARY - ensure contains tech
+                if (type === 'summary') {
+                    let s = val.trim();
+                    const techs = rolePreset.skills || [];
+                    const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
+                    if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
+                    // Guaranteed visible variation
+                    s = seededSynonymSwap(s, rand);
+                    s = seededBumpMetric(s, rand);
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
+                    return;
+                }
+
+                // PROJECTS
+                if (type === 'list' && label === 'Projects') {
+                    const lis = parseProjectsToLis(val, rolePreset, rand);
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+                     return;
+                }
+
+                // final fallback
+                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+                 debug.invalidAI[pid] = debug.invalidAI[pid] || 'post-parse fallback';
+                 debug.usedFallbackFor.push(pid);
+             });
+         } catch (e) {
+             console.error('AI processing failed:', e);
+             if (aiOnly) {
+               const msg = String(e.message || 'AI failed');
+               if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+                  const retryMs = parseRetryDelayMs(msg);
+                  if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+                  refundDailyTicket();
+                  return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
+               }
+               return res.status(503).json({ ok: false, error: msg, debug });
+             }
+            // If quota/rate-limited, do not burn daily counter
+            {
+              const msg = String(e && e.message ? e.message : '');
+              if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+                const retryMs = parseRetryDelayMs(msg);
+                if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
+                refundDailyTicket();
+              }
+            }
+             Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
+             // Ensure fallback still looks dynamic per request
+             htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
+         }
+     } else {
+          if (aiOnly) {
+            const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
+            return res.status(503).json({ ok: false, error: reason, debug });
+          }
+          Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
+          htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
+     }
+
+    // If any section fell back, attach a short note explaining why this can happen
+    if (Array.isArray(debug.usedFallbackFor) && debug.usedFallbackFor.length) {
+      debug.fallbackNote = 'AI returned an unusable value for one or more sections (missing/empty/etc.). The server used robust fallbacks for those sections to avoid failing the whole resume.';
+    }
+    
+    // Save to history only if we have a meaningful title (prevents blank "name:" items)
     try {
-      const respTxt = await callGeminiFlash(mainPrompt);
-      aiData = JSON.parse(respTxt.replace(/```json|```/g, '').trim());
+      const historyTitle = buildHistoryTitle({ nickname, profile, jd: jdNormalized, finalJD });
+      if (historyTitle) {
+        const histNickname = String(nickname || profile?.nickname || profile?.fullName || 'anonymous').trim().toLowerCase();
+        const createdAt = new Date().toISOString();
+        const id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+        await saveHistory({
+          id,
+          nickname: histNickname,
+          title: historyTitle,
+          jd: jdNormalized,
+          finalJD,
+          html: htmlSkeleton,
+          createdAt,
+        });
+        debug.historySaved = true;
+      } else {
+        debug.historySaved = false;
+        debug.historySkipReason = 'empty-title';
+      }
     } catch (e) {
-      refundDailyTicket(userKey);
-      return res.status(503).json({ ok: false, error: 'AI root generation failed' });
+      debug.historySaved = false;
+      debug.historyError = String(e && e.message ? e.message : e);
     }
 
-    const validators = {
-      summary: validateSummary,
-      skills: validateSkills,
-      projects: validateProjects,
-      achievements: validateAchievements,
-      experience: v => String(v).length > 20,
-      certifications: v => String(v).includes(' | ') || String(v).includes('|'),
-      traits: v => String(v).split(',').length >= 4
-    };
-
-    const finalData = {};
-    for (const key of ['summary', 'skills', 'experience', 'projects', 'certifications', 'achievements', 'traits']) {
-      let val = aiData[key];
-      let isValid = validators[key] ? validators[key](val) : !!val;
-
-      if (!isValid) {
-        val = await retryCriticalSection(key, jd);
-        isValid = validators[key] ? validators[key](val) : (val && val.length > 5);
+    // Guarantee profile education fields are reflected in HTML if the model omitted them
+    try {
+      const _p = (profile && typeof profile === 'object') ? profile : (body && body.profile ? body.profile : {});
+      if (typeof htmlSkeleton === 'string' && htmlSkeleton.trim()) {
+        htmlSkeleton = ensureEducationInHtml({ html: htmlSkeleton, profile: _p });
       }
+    } catch (_) {}
 
-      if (!isValid) {
-        refundDailyTicket(userKey);
-        return res.status(503).json({ ok: false, error: `AI failed section: ${key}` });
-      }
-      finalData[key] = val;
-    }
+    return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
-    // Build HTML
-    let html = `<div class="generated-resume"><style>.generated-resume{font-family:Helvetica,Arial,sans-serif;padding:20px;color:#1e293b} .skill-tag{display:inline-block;padding:3px 8px;margin:2px;background:#f1f5f9;border-radius:4px;font-size:11px;font-weight:600} .resume-section-title{font-weight:bold;margin:15px 0 5px;border-bottom:1px solid #e2e8f0;text-transform:uppercase;font-size:12px}</style>`;
-    html += `<h1 style="text-align:center;margin-bottom:2px">${escapeHtml((profile.fullName || 'User').toUpperCase())}</h1>`;
-
-    const sectionMapping = {
-      'Summary': () => `<div class="resume-section-title">Summary</div><p style="font-size:11px">${escapeHtml(finalData.summary)}</p>`,
-      'Technical Skills': () => `<div class="resume-section-title">Technical Skills</div><div>${finalData.skills.split(',').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join('')}</div>`,
-      'Work Experience': () => `<div class="resume-section-title">Work Experience</div><ul>${splitPipeBullets(finalData.experience).map(b => `<li style="font-size:11px">${escapeHtml(stripRolePrefix(b, ''))}</li>`).join('')}</ul>`,
-      'Projects': () => `<div class="resume-section-title">Projects</div><ul>${splitPipeBullets(finalData.projects).map(p => `<li style="font-size:11px">${escapeHtml(p)}</li>`).join('')}</ul>`,
-      'Certifications': () => `<div class="resume-section-title">Certifications</div><ul>${splitPipeBullets(finalData.certifications).map(c => `<li style="font-size:11px">${escapeHtml(c)}</li>`).join('')}</ul>`,
-      'Achievements': () => `<div class="resume-section-title">Achievements</div><ul>${splitPipeBullets(finalData.achievements).map(a => `<li style="font-size:11px">${escapeHtml(seededBumpMetric(seededSynonymSwap(a, rand), rand))}</li>`).join('')}</ul>`,
-      'Character Traits': () => `<div class="resume-section-title">Character Traits</div><div>${finalData.traits.split(',').map(t => `<span class="skill-tag">${escapeHtml(t.trim())}</span>`).join('')}</div>`
-    };
-
-    for (const s of sections) if (sectionMapping[s]) html += sectionMapping[s]();
-    html += `</div>`;
-
-    try { await saveHistory({ id: requestId, jd, profile, html, createdAt: new Date().toISOString() }); } catch (_) {}
-
-    return res.status(200).json({ ok: true, generated: { html }, debug: { requestId, aiOnly: true } });
   } catch (err) {
-    console.error('Final Error', err);
-    return res.status(500).json({ ok: false, error: 'Internal Error' });
+    return res.status(500).json({ error: err.message });
   }
 };
+
+// Build a stable "Recent Generations" title and avoid blanks
+function buildHistoryTitle({ nickname, profile, jd, finalJD }) {
+  const name = String(nickname || profile?.fullName || '').trim();
+  const j = String(jd || '').trim();
+  const fj = String(finalJD || '').trim();
+
+  // Prefer normalized JD, fallback to expanded JD, else empty
+  const role = j || (fj.split(' with ')[0] || '').trim();
+  const title = role ? (role.length > 60 ? role.slice(0, 60) + '…' : role) : '';
+
+  // If we still don't have a role/title, don't save history
+  if (!title) return '';
+
+  // Store a consistent "name: role" style title (UI can render as it likes)
+  if (name) return `${name}: ${title}`;
+  return title;
+}
