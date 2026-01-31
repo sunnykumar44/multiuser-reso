@@ -1181,150 +1181,161 @@ OUTPUT:`;
      }
 
       try {
-        if (!aiData) throw lastError || new Error('No AI data returned');
+        if (!aiData) {
+          refundDailyTicket();
+          debug.attemptsNote = 'no ai data';
+          return res.status(503).json({ ok: false, error: 'AI did not return data', debug });
+        }
 
         debug.aiKeys = Object.keys(aiData || {});
         debug.aiKeyCount = Array.isArray(debug.aiKeys) ? debug.aiKeys.length : 0;
 
         for (const pid of Object.keys(aiPrompts)) {
-                 let val = aiData ? aiData[pid] : undefined;
-                 const type = aiTypes[pid];
-                 const label = aiLabels[pid] || '';
- 
-                  // Lightweight validation to enforce prompt rules; fallback if validation fails
-                  try {
-                    let valid = true;
-                    if (val && typeof val === 'string') {
-                      if (type === 'summary') valid = validateSummary(val, rolePreset);
-                      else if (type === 'chips' && label === 'Technical Skills') valid = validateSkills(val, finalJD);
-                      else if (type === 'list' && label === 'Projects') valid = validateProjects(val, rolePreset);
-                      else if (type === 'list' && label === 'Achievements') valid = validateAchievements(val);
-                    } else {
-                      valid = false;
-                    }
+          let val = aiData ? aiData[pid] : undefined;
+          const type = aiTypes[pid];
+          const label = aiLabels[pid] || '';
 
-                    // If AI returned invalid Achievements/Certifications, retry with a focused prompt once.
-                    if (!valid && (label === 'Certifications' || label === 'Achievements')) {
-                      debug.invalidAI[pid] = 'validation-failed';
-                      const retried = await retryCriticalSection(pid, label);
-                      if (retried && typeof retried === 'string' && retried.trim().length) {
-                        val = retried;
-                        // re-validate quickly (achievements must be measurable)
-                        if (label === 'Achievements') {
-                          valid = validateAchievements(val);
-                        } else {
-                          valid = splitPipeBullets(val).length >= 2;
-                        }
-                      }
-                    }
+          // Basic existence check + type-specific validation
+          let valid = (typeof val === 'string' && val.trim().length > 0);
+          if (valid) {
+            if (type === 'summary') valid = validateSummary(val, rolePreset);
+            else if (type === 'chips' && label === 'Technical Skills') valid = validateSkills(val, finalJD);
+            else if (type === 'list' && label === 'Projects') valid = validateProjects(val, rolePreset);
+            else if (type === 'list' && label === 'Achievements') valid = validateAchievements(val);
+          }
 
-                    if (!valid) {
-                      debug.invalidAI[pid] = debug.invalidAI[pid] || 'validation-failed';
-                      // No ROLE_PRESET fallback: use JD-derived for these two critical sections.
-                      if (label === 'Certifications') {
-                        const items = jdDerivedCerts(finalJD, rand);
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, items.map(c => `<li>${escapeHtml(c)}</li>`).join(''));
-                      } else if (label === 'Achievements') {
-                        const items = jdDerivedAchievements(finalJD, rand);
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, items.map(a => `<li>${escapeHtml(a)}</li>`).join(''));
-                      } else {
-                        htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                      }
-                      debug.usedFallbackFor.push(pid);
-                      continue;
-                    }
-                  } catch (vErr) {
-                    // On any validator error, treat as invalid and fallback
-                    debug.invalidAI[pid] = 'validation-exception';
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                    debug.usedFallbackFor.push(pid);
-                    continue;
-                  }
- 
-                  // (type and label already declared above)
-                  if (!val || typeof val !== 'string' || val.trim().length < 2) {
-                    // Record why this section fell back (helps diagnose intermittent AI hiccups)
-                    let reason = 'unknown';
-                    if (val === undefined || val === null) reason = 'missing';
-                    else if (typeof val !== 'string') reason = `non-string (${typeof val})`;
-                    else if (typeof val === 'string' && val.trim().length < 2) reason = 'too-short/empty';
-                    debug.invalidAI[pid] = reason;
- 
-                    const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
-                    debug.usedFallbackFor.push(pid);
-                    continue;
-                  }
- 
-                  // WORK EXPERIENCE bullets: pipe-separated list -> <li> items.
-                  if (type === 'list' && label === 'Work Experience') {
-                    const bullets = splitPipeBullets(val);
-                    const cleaned = (bullets.length ? bullets : [String(val).trim()])
-                      .map(b => stripRolePrefix(b, ''))
-                      .map(b => b.replace(/\s+/g, ' ').trim())
-                      .filter(Boolean)
-                      .slice(0, 4);
-                    const lis = cleaned.map(b => `<li>${escapeHtml(b)}</li>`).join('') || aiFallbacks[pid];
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    continue;
-                  }
- 
-                  // CERTIFICATIONS (AI-first; JD-derived fallback only if AI output is incomplete)
-                  if (type === 'list' && label === 'Certifications') {
-                    let parts = String(val).split('|').map(b => b.trim()).filter(Boolean);
-                    if (parts.length < 2) {
-                      parts = parts.concat(jdDerivedCerts(finalJD, rand)).slice(0, 2);
-                    } else {
-                      parts = parts.slice(0, 2);
-                    }
-                    const lis = parts.map(b => `<li>${escapeHtml(b)}</li>`).join('');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    continue;
-                  }
- 
-                  // ACHIEVEMENTS (AI-first; JD-derived fallback only if AI output is incomplete)
-                  if (type === 'list' && label === 'Achievements') {
-                    let parts = String(val).split('|').map(b => b.trim()).filter(Boolean);
-                    if (parts.length < 2) {
-                      parts = parts.concat(jdDerivedAchievements(finalJD, rand)).slice(0, 2);
-                    } else {
-                      parts = parts.slice(0, 2);
-                    }
-                    const cleaned = parts.map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
-                    const lis = cleaned.map(b => `<li>${escapeHtml(b)}</li>`).join('');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    continue;
-                  }
- 
-                  // SUMMARY - ensure contains tech
-                  if (type === 'summary') {
-                    let s = val.trim();
-                    const techs = rolePreset.skills || [];
-                    const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
-                    if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
-                    // Guaranteed visible variation
-                    s = seededSynonymSwap(s, rand);
-                    s = seededBumpMetric(s, rand);
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
-                    continue;
-                  }
- 
-                  // PROJECTS
-                  if (type === 'list' && label === 'Projects') {
-                    const lis = parseProjectsToLis(val, rolePreset, rand);
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    continue;
-                  }
- 
-                  // final fallback
-                  htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                  debug.invalidAI[pid] = debug.invalidAI[pid] || 'post-parse fallback';
-                  debug.usedFallbackFor.push(pid);
-             }
-           } catch (e) {
-             console.warn('AI processing error', { pid, e, debug });
-             // fallback to at least show the section label
-             htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-             debug.usedFallbackFor.push(pid);
-           }
-         }
+          // If invalid, retry once with a focused prompt for that section
+          if (!valid) {
+            debug.invalidAI[pid] = 'validation-failed';
+            const retried = await retryCriticalSection(pid, label);
+            if (retried && typeof retried === 'string' && retried.trim().length) {
+              val = retried;
+              // re-validate
+              valid = (typeof val === 'string' && val.trim().length > 0);
+              if (valid) {
+                if (type === 'summary') valid = validateSummary(val, rolePreset);
+                else if (type === 'chips' && label === 'Technical Skills') valid = validateSkills(val, finalJD);
+                else if (type === 'list' && label === 'Projects') valid = validateProjects(val, rolePreset);
+                else if (type === 'list' && label === 'Achievements') valid = validateAchievements(val);
+              }
+            }
+          }
+
+          if (!valid) {
+            // Enforce AI-only: refund daily ticket and return explicit error
+            refundDailyTicket();
+            debug.invalidAI[pid] = debug.invalidAI[pid] || 'validation-failed';
+            // Generic fallback for other sections
+            htmlSkeleton = htmlSkeleton.replace(
+              `[${pid}]`,
+              escapeHtml(String(val || ''))
+            );
+            debug.usedFallbackFor.push(pid);
+            continue;
+          }
+          return res.status(503).json({ ok: false, error: `AI returned invalid content for section ${label || pid}`, debug });
+        }
+
+          // Place validated AI content into HTML (no fallback)
+          if (type === 'chips' && label === 'Technical Skills') {
+            let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+            parts = parts.map(normalizeSkillToken).filter(Boolean);
+            parts = dedupeSkillsLike(parts).slice(0, 15);
+            const chips = parts.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+            continue;
+          }
+
+          if (type === 'summary') {
+            let s = val.trim();
+            const techs = rolePreset.skills || [];
+            const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
+            if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
+            s = seededSynonymSwap(s, rand);
+            s = seededBumpMetric(s, rand);
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
+            continue;
+          }
+
+          if (type === 'list' && label === 'Work Experience') {
+            const bullets = splitPipeBullets(val);
+            const cleaned = (bullets.length ? bullets : [String(val).trim()])
+              .map(b => stripRolePrefix(b, ''))
+              .map(b => b.replace(/\s+/g, ' ').trim())
+              .filter(Boolean)
+              .slice(0, 4);
+            const lis = cleaned.map(b => `<li>${escapeHtml(b)}</li>`).join('');
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+            continue;
+          }
+
+          if (type === 'list' && label === 'Certifications') {
+            const parts = String(val).split('|').map(b => b.trim()).filter(Boolean).slice(0,2);
+            const lis = parts.map(b => `<li>${escapeHtml(b)}</li>`).join('');
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+            continue;
+          }
+
+          if (type === 'list' && label === 'Achievements') {
+            const parts = String(val).split('|').map(b => b.trim()).filter(Boolean).slice(0,2);
+            const cleaned = parts.map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
+            const lis = cleaned.map(b => `<li>${escapeHtml(b)}</li>`).join('');
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+            continue;
+          }
+
+          if (type === 'list' && label === 'Projects') {
+            const lis = parseProjectsToLis(val, rolePreset, rand);
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
+            continue;
+          }
+
+          if (type === 'chips' && label && label.toLowerCase().includes('character')) {
+            let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+            let soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,12);
+            soft = enforceNDistinct(soft, 6, extractKeywordsFromJD(finalJD, 'soft').concat(['Ownership','Curiosity','Learning Agility','Collaboration','Time Management','Adaptability','Attention to Detail']));
+            const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+            htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
+            continue;
+          }
+
+          // Default: insert escaped AI text
+          htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, escapeHtml(String(val)));
+        }
+      } catch (e) {
+        // On any unexpected error, refund daily ticket and return explicit error to force AI-only behavior
+        try { refundDailyTicket(); } catch (_) {}
+        console.error('AI processing failed (enforced AI-only):', e);
+        return res.status(503).json({ ok: false, error: String(e && e.message ? e.message : e), debug });
+      }
+
+    // FINAL HTML SKELETON POST-PROCESSING
+    htmlSkeleton = htmlSkeleton
+      .replace(/<li><\/li>/g, '') // remove empty <li> tags
+      .replace(/>\s+</g, '><') // remove whitespace between tags
+      .trim();
+
+    // 4. SAVE TO HISTORY (if not AI-only)
+    try {
+      if (!aiOnly && requestId && userKey) {
+        saveHistory({
+          requestId,
+          userId: userKey,
+          profile: { ...profile, skills: Array.isArray(profile.skills) ? profile.skills : String(profile.skills).split(',') },
+          jd: finalJD,
+          html: htmlSkeleton,
+          createdAt: new Date().toISOString(),
+          debug: { requestSeed, aiEnabled: !!GEMINI_API_KEY, aiOnly, daily: remainingInfo }
+        });
+      }
+    } catch (e) {
+      console.warn('History save error', e);
+    }
+
+    // 5. RETURN RESPONSE
+    return res.json({ ok: true, html: htmlSkeleton, debug });
+  } catch (e) {
+    console.error('Resume generation error', e);
+    return res.status(500).json({ ok: false, error: 'Internal server error', debug: e });
+  }
+};
