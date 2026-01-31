@@ -598,10 +598,10 @@ async function callGeminiFlash(promptText, opts = {}) {
     }
 
     // Exclude image/vision models
-    const textOnly = names.filter(n => n.includes('gemini') && !n.includes('image') && !n.includes('vision'));
+    const textOnly = names.filter(n => n.includes('gemini') && !n.includes('image') && !n.includes('vision') && !n.includes('audio') && !n.includes('native-audio'));
     const preferred = textOnly.filter(n => n.includes('flash') || n.includes('pro'));
     let picked = preferred.length ? preferred : (textOnly.length ? textOnly : fallback);
-    if (preferredFromEnv) {
+    if (preferredFromEnv && !preferredFromEnv.includes('audio') && !preferredFromEnv.includes('native-audio')) {
       // Ensure preferred model is tried first
       picked = [preferredFromEnv, ...picked.filter(n => n !== preferredFromEnv)];
     }
@@ -782,6 +782,7 @@ module.exports = async (req, res) => {
     const rand = mulberry32(requestSeed);
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
     const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
+    const noFallback = (typeof body.noFallback === 'boolean') ? body.noFallback : true;
     const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
 
     // Normalize and dedupe incoming skills ("Python pre-processing" but on the server)
@@ -1047,6 +1048,146 @@ ${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v} || VARIATION_NONCE:${r
 OUTPUT: JSON only. No markdown.
 `;
 
+    function buildRepairPrompt(pids, seed) {
+      return `
+You are an EXPERT RESUME INTELLIGENCE ENGINE.
+JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1200)}"
+USER PROFILE (may be partial): ${JSON.stringify(profile).slice(0, 1500)}
+
+STRICT: Fill ONLY the requested missing sections. Return VALID JSON only with these keys: ${pids.join(', ')}.
+NO placeholders. NO empty strings. NO markdown. NO extra keys.
+
+SECTION INSTRUCTIONS:
+${pids.map(k => `- ${k}: ${aiPrompts[k]} || VARIATION_NONCE:${seed}:${k}`).join('\n')}
+
+VARIATION_SEED: ${seed}
+`;
+    }
+
+    function renderFromAiData(aiData, baseHtml) {
+      let htmlOut = baseHtml;
+      const missing = new Set();
+
+      Object.keys(aiPrompts).forEach(pid => {
+        let val = aiData ? aiData[pid] : null;
+        const type = aiTypes[pid];
+        const label = aiLabels[pid] || '';
+
+        if (!val || typeof val !== 'string' || val.trim().length < 2) {
+          let reason = 'unknown';
+          if (val === undefined || val === null) reason = 'missing';
+          else if (typeof val !== 'string') reason = `non-string (${typeof val})`;
+          else if (typeof val === 'string' && val.trim().length < 2) reason = 'too-short/empty';
+          debug.invalidAI[pid] = reason;
+
+          if (noFallback || aiOnly) {
+            missing.add(pid);
+            return;
+          }
+
+          const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
+          htmlOut = htmlOut.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+          debug.usedFallbackFor.push(pid);
+          return;
+        }
+
+        // SKILLS: augment instead of replacing completely
+        if (type === 'chips' && label === 'Technical Skills') {
+          let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+          parts = parts.map(normalizeSkillToken).filter(Boolean);
+          // keep only likely technical tokens, else augment
+          let techParts = parts.filter(p => isLikelyTechnical(p));
+          // also allow rolePreset matches
+          techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
+          // add random preset skills to reach minimum using shuffled presets
+          const shuffled = shuffle((rolePreset.skills || []).slice());
+          for (const pick of shuffled) {
+            if (techParts.length >= 12) break;
+            const canonPick = normalizeSkillToken(pick);
+            if (canonPick && !techParts.some(x => x.toLowerCase() === canonPick.toLowerCase())) techParts.push(canonPick);
+          }
+
+          techParts = dedupeSkillsLike(techParts);
+          // Reorder with request-seeded randomness so even similar sets render differently
+          techParts = shuffleSeeded(techParts, rand);
+          if (techParts.length < 8) {
+            if (noFallback || aiOnly) {
+              missing.add(pid);
+              return;
+            }
+            const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
+            htmlOut = htmlOut.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
+            debug.usedFallbackFor.push(pid);
+            return;
+          }
+          const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+          htmlOut = htmlOut.replace(`[${pid}]`, chips);
+          return;
+        }
+
+        // TRAITS (soft chips)
+        if (type === 'chips' && label && label.toLowerCase().includes('character')) {
+          let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+          let soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,12);
+          const extras = extractKeywordsFromJD(finalJD, 'soft');
+          soft = enforceNDistinct(soft, 6, extras.concat(['Ownership','Curiosity','Learning Agility','Collaboration','Time Management','Adaptability','Attention to Detail']));
+          const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
+          htmlOut = htmlOut.replace(`[${pid}]`, chips);
+          return;
+        }
+
+        // CERTIFICATIONS
+        if (type === 'list' && label === 'Certifications') {
+          let parts = val.split('|').map(b => b.trim()).filter(Boolean);
+          const certs = rotateBySeed(enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []), rand);
+          const lis = certs.map(b => `<li>${b}</li>`).join('');
+          htmlOut = htmlOut.replace(`[${pid}]`, lis);
+          return;
+        }
+
+        // ACHIEVEMENTS
+        if (type === 'list' && label === 'Achievements') {
+          let parts = val.split('|').map(b => b.trim()).filter(Boolean);
+          let achs = augmentAchievements(parts, rolePreset);
+          achs = rotateBySeed(achs, rand).map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
+          const lis = achs.map(b => `<li>${b}</li>`).join('');
+          htmlOut = htmlOut.replace(`[${pid}]`, lis);
+          return;
+        }
+
+        // SUMMARY - ensure contains tech
+        if (type === 'summary') {
+          let s = val.trim();
+          const techs = rolePreset.skills || [];
+          const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
+          if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
+          // Guaranteed visible variation
+          s = seededSynonymSwap(s, rand);
+          s = seededBumpMetric(s, rand);
+          htmlOut = htmlOut.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
+          return;
+        }
+
+        // PROJECTS
+        if (type === 'list' && label === 'Projects') {
+          const lis = parseProjectsToLis(val, rolePreset, rand);
+          htmlOut = htmlOut.replace(`[${pid}]`, lis);
+          return;
+        }
+
+        // final fallback
+        if (noFallback || aiOnly) {
+          missing.add(pid);
+          return;
+        }
+        htmlOut = htmlOut.replace(`[${pid}]`, aiFallbacks[pid]);
+        debug.invalidAI[pid] = debug.invalidAI[pid] || 'post-parse fallback';
+        debug.usedFallbackFor.push(pid);
+      });
+
+      return { html: htmlOut, missing };
+    }
+
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
         // Enforce local daily limit only when AI is requested
         const ticket = consumeOne(userKey);
@@ -1101,113 +1242,37 @@ OUTPUT: JSON only. No markdown.
          try {
              if (!aiData) throw lastError || new Error('No AI data returned');
 
-             Object.keys(aiPrompts).forEach(pid => {
-                 let val = aiData[pid];
-                 const type = aiTypes[pid];
-                 const label = aiLabels[pid] || '';
-                 if (!val || typeof val !== 'string' || val.trim().length < 2) {
-                     // Record why this section fell back (helps diagnose intermittent AI hiccups)
-                     let reason = 'unknown';
-                     if (val === undefined || val === null) reason = 'missing';
-                     else if (typeof val !== 'string') reason = `non-string (${typeof val})`;
-                     else if (typeof val === 'string' && val.trim().length < 2) reason = 'too-short/empty';
-                     debug.invalidAI[pid] = reason;
+             const baseSkeleton = htmlSkeleton;
+             let render = renderFromAiData(aiData, baseSkeleton);
 
-                      const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
-                      htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
-                      debug.usedFallbackFor.push(pid);
-                      return;
-                  }
+             if (render.missing.size && (noFallback || aiOnly)) {
+               // Retry only missing sections with a repair prompt (up to 2 attempts)
+               let repaired = false;
+               const missingPids = Array.from(render.missing);
+               const repairAttempts = [makeSeed().toString(36), makeSeed().toString(36)];
 
-                  // SKILLS: augment instead of replacing completely
-                if (type === 'chips' && label === 'Technical Skills') {
-                    let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
-                    parts = parts.map(normalizeSkillToken).filter(Boolean);
-                     // keep only likely technical tokens, else augment
-                    let techParts = parts.filter(p => isLikelyTechnical(p));
-                    // also allow rolePreset matches
-                    techParts = techParts.concat(parts.filter(p => rolePreset.skills.map(x=>x.toLowerCase()).includes(p.toLowerCase())));
-                    // add random preset skills to reach minimum using shuffled presets
-                    const shuffled = shuffle((rolePreset.skills || []).slice());
-                    for (const pick of shuffled) {
-                      if (techParts.length >= 12) break;
-                      const canonPick = normalizeSkillToken(pick);
-                      if (canonPick && !techParts.some(x => x.toLowerCase() === canonPick.toLowerCase())) techParts.push(canonPick);
-                    }
+               for (const seed of repairAttempts) {
+                 try {
+                   const repairPrompt = buildRepairPrompt(missingPids, seed);
+                   const repairText = await callGeminiFlash(repairPrompt, { temperature: 1.05, topP: 0.95, maxOutputTokens: 1800 });
+                   const repairData = JSON.parse(repairText.replace(/```json|```/g, '').trim());
+                   aiData = Object.assign({}, aiData, repairData);
+                   render = renderFromAiData(aiData, baseSkeleton);
+                   if (!render.missing.size) { repaired = true; break; }
+                 } catch (e) {
+                   debug.attempts.push({ temp: 'repair', parsed: false, error: String(e && e.message ? e.message : e) });
+                 }
+               }
 
-                    techParts = dedupeSkillsLike(techParts);
-                     // Reorder with request-seeded randomness so even similar sets render differently
-                     techParts = shuffleSeeded(techParts, rand);
-                     if (techParts.length < 8) {
-                       // fallback using dynamic fallback
-                       const dynamic = dynamicFallbackFor(type, label, rolePreset, finalJD, Array.isArray(profile.skills) ? profile.skills : []);
-                       htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
-                       debug.usedFallbackFor.push(pid);
-                       return;
-                     }
-                     const chips = techParts.slice(0,15).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                     htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                     return;
-                }
+               if (!repaired && render.missing.size) {
+                 throw new Error(`AI missing required sections: ${Array.from(render.missing).join(', ')}`);
+               }
+             }
 
-                // TRAITS (soft chips)
-                if (type === 'chips' && label && label.toLowerCase().includes('character')) {
-                    let parts = val.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
-                    let soft = parts.filter(p => !isLikelyTechnical(p)).slice(0,12);
-                    const extras = extractKeywordsFromJD(finalJD, 'soft');
-                    soft = enforceNDistinct(soft, 6, extras.concat(['Ownership','Curiosity','Learning Agility','Collaboration','Time Management','Adaptability','Attention to Detail']));
-                    const chips = soft.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join(' ');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, chips);
-                    return;
-                }
-
-                // CERTIFICATIONS
-                if (type === 'list' && label === 'Certifications') {
-                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    const certs = rotateBySeed(enforceTwoDistinct(augmentCerts(parts, rolePreset), rolePreset.certs || []), rand);
-                    const lis = certs.map(b => `<li>${b}</li>`).join('');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    return;
-                }
-
-                // ACHIEVEMENTS
-                if (type === 'list' && label === 'Achievements') {
-                    let parts = val.split('|').map(b => b.trim()).filter(Boolean);
-                    let achs = augmentAchievements(parts, rolePreset);
-                    achs = rotateBySeed(achs, rand).map(a => seededBumpMetric(seededSynonymSwap(a, rand), rand));
-                    const lis = achs.map(b => `<li>${b}</li>`).join('');
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                    return;
-                }
-
-                // SUMMARY - ensure contains tech
-                if (type === 'summary') {
-                    let s = val.trim();
-                    const techs = rolePreset.skills || [];
-                    const hasTech = techs.some(t => s.toLowerCase().includes(t.toLowerCase()));
-                    if (!hasTech) s = `${s} Skilled in ${techs.slice(0,3).join(', ')}.`;
-                    // Guaranteed visible variation
-                    s = seededSynonymSwap(s, rand);
-                    s = seededBumpMetric(s, rand);
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, `<p>${escapeHtml(s)}</p>`);
-                    return;
-                }
-
-                // PROJECTS
-                if (type === 'list' && label === 'Projects') {
-                    const lis = parseProjectsToLis(val, rolePreset, rand);
-                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, lis);
-                     return;
-                }
-
-                // final fallback
-                htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
-                 debug.invalidAI[pid] = debug.invalidAI[pid] || 'post-parse fallback';
-                 debug.usedFallbackFor.push(pid);
-             });
+             htmlSkeleton = render.html;
          } catch (e) {
              console.error('AI processing failed:', e);
-             if (aiOnly) {
+             if (aiOnly || noFallback) {
                const msg = String(e.message || 'AI failed');
                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
                   const retryMs = parseRetryDelayMs(msg);
@@ -1231,7 +1296,7 @@ OUTPUT: JSON only. No markdown.
              htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
          }
      } else {
-          if (aiOnly) {
+          if (aiOnly || noFallback) {
             const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
             return res.status(503).json({ ok: false, error: reason, debug });
           }
