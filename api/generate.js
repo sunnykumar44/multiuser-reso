@@ -246,57 +246,69 @@ function applyGuaranteedVariationToFallback(html, rolePreset, rand = Math.random
   }
 }
 
-function escapeHtml(s = "") {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// --- New: Lightweight AI output validators ---
+function containsAnyToken(text, tokens) {
+  if (!text) return false;
+  const t = String(text).toLowerCase();
+  for (const tok of (tokens || [])) {
+    if (!tok) continue;
+    if (t.includes(String(tok).toLowerCase())) return true;
+  }
+  return false;
 }
 
-// Ensure Education shows college + branch + edu years from profile even if model omits them
-function ensureEducationInHtml({ html, profile } = {}) {
+function validateSummary(text, rolePreset) {
   try {
-    const outHtml = String(html || '');
-    const p = (profile && typeof profile === 'object') ? profile : {};
-    const college = String(p.college || '').trim();
-    const branch = String(p.branch || '').trim();
-    const eduFrom = String(p.eduFrom || '').trim();
-    const eduTo = String(p.eduTo || '').trim();
-    const eduYears = [eduFrom, eduTo].filter(Boolean).join('–');
+    if (!text || String(text).trim().length < 30) return false;
+    const t = String(text).toLowerCase();
+    // Must reference at least one technical skill from preset OR mention a project/experience/metric
+    if (Array.isArray(rolePreset?.skills) && rolePreset.skills.length && containsAnyToken(t, rolePreset.skills)) return true;
+    if (/\b(project|built|develop(ed)?|implemented|experience|improv|improved)\b/i.test(t)) return true;
+    if (/\d+%|\b\d+\b/.test(t)) return true;
+    return false;
+  } catch (_) { return false; }
+}
 
-    // If there is no usable education info, do nothing
-    if (!college && !branch && !eduYears) return outHtml;
+function validateSkills(val, finalJD) {
+  try {
+    if (!val) return false;
+    // Accept comma/newline/pipe separated
+    const parts = String(val).split(/[,|\n]+/).map(s => String(s).trim()).filter(Boolean);
+    if (parts.length < 6) return false; // require a reasonable count
+    // At least half should look technical
+    const techCount = parts.filter(p => isLikelyTechnical(p)).length;
+    if (techCount < Math.max(1, Math.floor(parts.length / 2))) return false;
+    return true;
+  } catch (_) { return false; }
+}
 
-    // If AI output already contains branch or years, do nothing
-    const lower = outHtml.toLowerCase();
-    const hasBranch = branch && lower.includes(String(branch).toLowerCase());
-    const hasYears = eduYears && lower.includes(String(eduYears).toLowerCase());
-    if (hasBranch || hasYears) return outHtml;
-
-    // If it doesn't even mention Education, do nothing (avoid risky injection)
-    const hasEducationHeading = /education/i.test(outHtml);
-    if (!hasEducationHeading) return outHtml;
-
-    // Build a safe Education block that matches the server template class names
-    const eduLine2 = [branch, eduYears].filter(Boolean).join(' • ');
-    const injected = `
-<div class="resume-item">
-  <div class="resume-row">
-    <span class="resume-role">${escapeHtml(college || 'Education')}</span>
-    <span class="resume-date">${escapeHtml(eduYears || '')}</span>
-  </div>
-  ${branch ? `<span class="resume-company">${escapeHtml(branch)}</span>` : ''}
-</div>
-`;
-
-    // Try to insert right after the Education section title
-    // Pattern: <div class="resume-section-title">Education</div>
-    const re = /(<div\s+class="resume-section-title"[^>]*>\s*Education\s*<\/div>)/i;
-    if (re.test(outHtml)) {
-      return outHtml.replace(re, `$1${injected}`);
+function validateProjects(val, rolePreset) {
+  try {
+    if (!val) return false;
+    const text = String(val);
+    // Expect two projects separated by '|' or ' | ' or two list items
+    const pieces = text.split(/\||\n\s*-|<li>|<b>|<\/li>/).map(s=>s.trim()).filter(Boolean);
+    if (pieces.length < 2) return false;
+    // Each piece should mention a technology or a measurable metric
+    for (const p of pieces.slice(0,2)) {
+      if (!p) return false;
+      if (!(/\d+%|\b\d+\b/.test(p) || containsAnyToken(p, rolePreset.skills) || isLikelyTechnical(p))) return false;
     }
+    return true;
+  } catch (_) { return false; }
+}
 
-    return outHtml;
-  } catch (_) {
-    return String(html || '');
-  }
+function validateAchievements(val) {
+  try {
+    if (!val) return false;
+    const parts = String(val).split(/\||\n|<li>/).map(s=>s.trim()).filter(Boolean);
+    if (parts.length < 1) return false;
+    // At least one achievement should include a number or percent
+    if (parts.some(p => /\d+%|\b\d+\b/.test(p))) return true;
+    // or include 'improved'/'reduced'/'automated'
+    if (parts.some(p => /\b(improv|improved|reduc|reduced|automat|automated|saved)\b/i.test(p))) return true;
+    return false;
+  } catch (_) { return false; }
 }
 
 // --- CONSTANTS ---
@@ -1105,7 +1117,34 @@ OUTPUT: JSON only. No markdown.
                  let val = aiData[pid];
                  const type = aiTypes[pid];
                  const label = aiLabels[pid] || '';
-                 if (!val || typeof val !== 'string' || val.trim().length < 2) {
+
+                // Lightweight validation to enforce prompt rules; fallback if validation fails
+                try {
+                  let valid = true;
+                  if (val && typeof val === 'string') {
+                    if (type === 'summary') valid = validateSummary(val, rolePreset);
+                    else if (type === 'chips' && label === 'Technical Skills') valid = validateSkills(val, finalJD);
+                    else if (type === 'list' && label === 'Projects') valid = validateProjects(val, rolePreset);
+                    else if (type === 'list' && label === 'Achievements') valid = validateAchievements(val);
+                  } else {
+                    valid = false;
+                  }
+                  if (!valid) {
+                    debug.invalidAI[pid] = 'validation-failed';
+                    htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+                    debug.usedFallbackFor.push(pid);
+                    return;
+                  }
+                } catch (vErr) {
+                  // On any validator error, treat as invalid and fallback
+                  debug.invalidAI[pid] = 'validation-exception';
+                  htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]);
+                  debug.usedFallbackFor.push(pid);
+                  return;
+                }
+
+    // (type and label already declared above)
+    if (!val || typeof val !== 'string' || val.trim().length < 2) {
                      // Record why this section fell back (helps diagnose intermittent AI hiccups)
                      let reason = 'unknown';
                      if (val === undefined || val === null) reason = 'missing';
@@ -1117,7 +1156,7 @@ OUTPUT: JSON only. No markdown.
                       htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, dynamic || aiFallbacks[pid]);
                       debug.usedFallbackFor.push(pid);
                       return;
-                  }
+                 }
 
                   // SKILLS: augment instead of replacing completely
                 if (type === 'chips' && label === 'Technical Skills') {
