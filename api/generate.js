@@ -588,37 +588,57 @@ function randomFrom(arr) {
   return a[Math.floor(Math.random() * a.length)];
 }
 
-// Augment project text by inserting a role-relevant tech and a small measurable result
-function augmentProjectIfNeeded(text, rolePreset, rand = Math.random) {
-  // if text already mentions techs, return
-  if (isLikelyTechnical(text)) return text;
-  const tech = randomFromSeeded(rolePreset.skills || ['Python'], rand);
-  const pct = randomPercentSeeded(rand, 10, 40);
-  return `${text.trim()} Built using ${tech}. Achieved ~${pct}% improvement in relevant metric.`;
+// Tiny safe picker used by augmentCerts/augmentAchievements.
+// Defined right here so it *cannot* be undefined at runtime.
+function randomFrom(list, fallback = '') {
+  try {
+    const a = Array.isArray(list) ? list.filter(x => x != null) : [];
+    if (!a.length) return fallback;
+    return a[Math.floor(Math.random() * a.length)];
+  } catch (_) {
+    return fallback;
+  }
 }
 
 // Augment a certification list to ensure real certs
 function augmentCerts(parts, rolePreset) {
   const out = [];
-  for (const p of parts) {
-    const hasKnown = ['AWS','Oracle','PCEP','Microsoft','ISTQB','Confluent','Google'].some(t => p.toUpperCase().includes(t));
-    if (hasKnown) out.push(p);
-    else out.push(randomFrom(rolePreset.certs || ['PCEP – Certified Entry-Level Python Programmer']));
+  const pool = Array.isArray(rolePreset?.certs) && rolePreset.certs.length
+    ? rolePreset.certs
+    : ['PCEP – Certified Entry-Level Python Programmer'];
+
+  for (const p of (parts || [])) {
+    const s = String(p || '').trim();
+    if (!s) continue;
+    const hasKnown = ['AWS','Oracle','PCEP','Microsoft','ISTQB','Confluent','Google']
+      .some(t => s.toUpperCase().includes(t));
+    if (hasKnown) out.push(s);
+    else out.push(randomFrom(pool, pool[0]));
   }
-  // ensure two certs
-  while (out.length < 2) out.push(randomFrom(rolePreset.certs || ['PCEP – Certified Entry-Level Python Programmer']));
-  return out.slice(0,2);
+
+  while (out.length < 2) out.push(randomFrom(pool, pool[0]));
+  return out.slice(0, 2);
 }
 
 // Augment achievements to include measurable numbers
 function augmentAchievements(parts, rolePreset) {
   const out = [];
-  for (const p of parts) {
-    if (/%|\b(reduc|improv|increas|save|autom|improved|reduced)\b/i.test(p)) out.push(p);
-    else out.push(`${p} Improved performance by ${randomPercent()}%.`);
+  const pool = Array.isArray(rolePreset?.achievements) && rolePreset.achievements.length
+    ? rolePreset.achievements
+    : ['Delivered project demonstrating technical fundamentals'];
+
+  for (const p of (parts || [])) {
+    const s = String(p || '').trim();
+    if (!s) continue;
+    if (/%|\b(reduc|improv|increas|save|autom|improved|reduced)\b/i.test(s)) {
+      out.push(s);
+    } else {
+      out.push(`${s} Improved performance by ${randomPercent()}%.`);
+    }
   }
-  while (out.length < 2) out.push(randomFrom(rolePreset.achievements || ['Delivered project demonstrating technical fundamentals']));
-  return out.slice(0,2);
+
+  while (out.length < 2) out.push(randomFrom(pool, pool[0]));
+  return out.slice(0, 2);
 }
 
 async function callGeminiFlash(promptText, opts = {}) {
