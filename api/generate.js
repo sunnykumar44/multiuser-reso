@@ -1319,7 +1319,14 @@ VARIATION_SEED: ${seed}
 
         // PROJECTS
         if (type === 'list' && label === 'Projects') {
-          const lis = parseProjectsToLis(val, rolePreset, rand);
+          const safeParser = (typeof parseProjectsToLis === 'function') ? parseProjectsToLis : function fallbackProjects(v, rolePreset, rand = Math.random) {
+            const txt = String(v || '').split('|').map(s => s.trim()).filter(Boolean);
+            const items = (txt.length ? txt : ['<b>Project:</b> Built a role-aligned solution', '<b>Project:</b> Measured outcome 25%+'])
+              .slice(0, 2)
+              .map(p => `<li>${augmentProjectIfNeeded(p, rolePreset, rand)}</li>`);
+            return items.join('');
+          };
+          const lis = safeParser(val, rolePreset, rand);
           htmlOut = htmlOut.replace(`[${pid}]`, lis);
           return;
         }
