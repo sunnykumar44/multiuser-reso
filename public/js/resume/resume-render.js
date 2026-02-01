@@ -146,8 +146,9 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
 
     const content = hasArr(list)
       ? list.map((x) => `<span class="pill" ${EDIT_ATTRS}>${String(x).trim()}</span>`).join("")
-      : `<span class="pill" ${EDIT_ATTRS}>AI will fill this</span>`;
+      : ""; // no synthetic "AI will fill this" text
 
+    // If keepEmpty and no items, render empty container so user can edit manually.
     return `
       <div class="r-section">
         <div class="r-title">${title}</div>
@@ -165,7 +166,7 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
     const isEmpty = !hasArr(list);
 
     const block = isEmpty
-      ? `<div class="r-text muted" style="font-style:italic;" ${EDIT_ATTRS}>(AI will fill this section)</div>`
+      ? ""  // no "(AI will fill this section)" stub; leave section empty
       : list
           .map((e) => {
             const key = String(e.key || "").trim().replace(/[“”"]/g, "");
@@ -208,7 +209,7 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
     const isEmpty = !hasArr(items);
 
     const content = isEmpty
-      ? `<div class="r-text muted" style="font-style:italic;" ${EDIT_ATTRS}>(AI will fill this list)</div>`
+      ? "" // no "(AI will fill this list)" stub
       : `<ul class="r-bullets">${items.map((it) => `<li ${EDIT_ATTRS}>${ensureWordRange(String(it || '').trim(), 27, 32)}</li>`).join("")}</ul>`;
 
     return `
@@ -249,7 +250,7 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
     ${(hasText(summaryText) || showEmptySummary) ? `
       <div class="r-section">
         <div class="r-title">Summary</div>
-        <div class="r-text" ${EDIT_ATTRS}>${summaryText || "(AI will generate summary here)"}</div>
+        <div class="r-text" ${EDIT_ATTRS}>${summaryText}</div>
       </div>
     ` : ""}
 
@@ -273,7 +274,7 @@ export function renderPaper({ paperEl, profile, jd, mode, template, scope = [], 
           ${
             skills.length
               ? skills.map((s) => `<span class="pill" ${EDIT_ATTRS}>${s}</span>`).join("")
-              : `<span class="pill" ${EDIT_ATTRS}>AI will generate skills here</span>`
+              : ""
           }
         </div>
       </div>
@@ -294,35 +295,34 @@ function wordCount(s) {
   return String(s || '').trim().split(/\s+/).filter(Boolean).length;
 }
 
+// Replace ensureWordRange with a simpler, non-padding version
 function ensureWordRange(text, minWords = 27, maxWords = 32) {
   let s = String(text || '').replace(/\s+/g, ' ').trim();
   if (!s) return s;
 
-  // Split into words; keep punctuation attached to words (good enough for UX)
   const words = s.split(' ').filter(Boolean);
   if (words.length > maxWords) {
     return words.slice(0, maxWords).join(' ').replace(/[,;:]?$/, '') + '.';
   }
-  if (words.length < minWords) {
-    // Pad with a neutral tail that doesn't remove numbers/metrics.
-    const pad = [
-      'using best practices,',
-      'ensuring data quality,',
-      'improving reliability,',
-      'and collaborating with stakeholders.'
-    ].join(' ');
-    let out = s;
-    while (wordCount(out) < minWords) {
-      out = (out + ' ' + pad).replace(/\s+/g, ' ').trim();
-      if (wordCount(out) > maxWords) {
-        out = out.split(' ').slice(0, maxWords).join(' ').trim();
-        break;
-      }
-    }
-    if (!/[.!?]$/.test(out)) out += '.';
-    return out;
-  }
   return s;
+}
+
+function escapeRegExp(s) {
+  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripRolePrefix(bullet, role) {
+  const s = String(bullet || '').trim();
+  const k = String(role || '').trim();
+  if (!s || !k) return s;
+  const re = new RegExp('^' + escapeRegExp(k) + '\\s*(?:\\u2013|\\u2014|-|:)\\s*', 'i');
+  return s.replace(re, '').trim();
+}
+  if (!s || !k) return s;
+  // Match: "<role> - ..." or "<role> – ..." or "<role>: ..." (hyphen types included)
+  const re = new RegExp('^' + escapeRegExp(k) + '\\s*(?:\\u2013|\\u2014|-|:)\\s*', 'i');
+  return s.replace(re, '').trim();
+}
 }
 
 function escapeRegExp(s) {

@@ -581,6 +581,13 @@ function shuffleSeeded(arr, rand) {
 function randomFromSeeded(arr, rand) { return arr[Math.floor(rand() * arr.length)]; }
 function randomPercentSeeded(rand, min = 10, max = 40) { return Math.floor(rand() * (max - min + 1)) + min; }
 
+// Add simple non-seeded random helper used by augmentCerts / augmentAchievements
+function randomFrom(arr) {
+  const a = Array.isArray(arr) ? arr : [];
+  if (!a.length) return '';
+  return a[Math.floor(Math.random() * a.length)];
+}
+
 // Augment project text by inserting a role-relevant tech and a small measurable result
 function augmentProjectIfNeeded(text, rolePreset, rand = Math.random) {
   // if text already mentions techs, return
@@ -818,6 +825,14 @@ function canonicalSectionName(name) {
   return String(name || '').trim().replace(/\s+/g, ' ').replace(/(^|\s)\S/g, l => l.toUpperCase());
 };
 
+// Central helper: when strict flags are ON, never generate textual fallbacks.
+// When strict flags are OFF (non-strict mode, e.g. demo), we can still use old fallbacks.
+function dynamicFallbackFor(type, label, rolePreset, finalJD, profileSkills) {
+  // This function will be shadowed later with access to flags (noFallback/aiOnly/forceStrict).
+  // Placeholder here to keep references valid.
+  return '';
+}
+
 // --------------------
 // Missing helpers (required by renderFromAiData strict path)
 // --------------------
@@ -994,165 +1009,39 @@ module.exports = async (req, res) => {
     // Role preset for strong deterministic fallbacks and validation
     const rolePreset = getRolePreset(finalJD);
     
-    // Map pid -> section label for validation later
-    const seen = new Set();
-    const sectionsToRender = [];
-    const rawScope = (scope && scope.length) ? scope : ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Certifications', 'Achievements', 'Character Traits'];
-    
-    for (const s of rawScope) {
-        const c = canonicalSectionName(s);
-        if (!seen.has(c)) {
-            seen.add(c);
-            sectionsToRender.push({ original: s, canonical: c });
+    // strict flags in closure for dynamicFallbackFor
+    const strictFlags = { noFallback, aiOnly, forceStrict };
+
+    // Shadow dynamicFallbackFor with behavior aware of strict flags
+    function dynamicFallbackFor(type, label, rolePresetLocal, finalJDLocal, profileSkillsLocal) {
+      // If caller explicitly wants AI-only behavior, NEVER synthesize text.
+      if (strictFlags.noFallback || strictFlags.aiOnly || strictFlags.forceStrict) {
+        return '';
+      }
+      // Non-strict (e.g. legacy UI or non-AI-only calls): keep existing behavior.
+      try {
+        if (type === 'summary') {
+          return `<p>${escapeHtml(dynamicSummary(rolePresetLocal, finalJDLocal))}</p>`;
         }
+        if (type === 'chips' && label === 'Technical Skills') {
+          const skills = getSmartFallback('skills', finalJDLocal, mulberry32(makeSeed()));
+          return (skills || []).map(s => `<span class="skill-tag">${escapeHtml(String(s || '').trim())}</span>`).join(' ');
+        }
+        if (type === 'list' && label === 'Certifications') {
+          return getSmartFallback('certifications', finalJDLocal, mulberry32(makeSeed()))
+            .split('|').map(c => `<li>${escapeHtml(c.trim())}</li>`).join('');
+        }
+        if (type === 'list' && label === 'Achievements') {
+          return getSmartFallback('achievements', finalJDLocal, mulberry32(makeSeed()))
+            .split('|').map(a => `<li>${escapeHtml(a.trim())}</li>`).join('');
+        }
+        if (type === 'list' && label === 'Projects') {
+          return getSmartFallback('projects', finalJDLocal, mulberry32(makeSeed()))
+            .split('|').map(p => `<li>${escapeHtml(p.trim())}</li>`).join('');
+        }
+      } catch (_) {}
+      return '';
     }
-
-    const priority = ['Summary', 'Technical Skills', 'Work Experience', 'Projects', 'Education', 'Certifications', 'Achievements', 'Character Traits'];
-    sectionsToRender.sort((a, b) => {
-        const ia = priority.indexOf(a.canonical);
-        const ib = priority.indexOf(b.canonical);
-        if (ia !== -1 && ib !== -1) return ia - ib;
-        if (ia !== -1) return -1;
-        if (ib !== -1) return 1;
-        return 0;
-    });
-
-    for (const secObj of sectionsToRender) {
-        const label = secObj.canonical;
-        
-        if (label === 'Summary') {
-            resumeBodyHtml += `<div class="resume-section-title">Summary</div>`;
-            const pid = `sec_${sectionCounter++}`;
-            const original = profile.summary || "";
-            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            
-            aiPrompts[pid] = `MANDATORY: Write a professional 3-4 sentence Summary for a FRESHER applying to: "${finalJD.slice(0,200)}". RULES: (1) Mention key technical skills inferred from role (2) Highlight project experience (3) Show eagerness to contribute (4) NO generic statements. Use ONLY job-relevant keywords. NEVER skip this.`;
-            // Fallback uses first JD keyword
-            const kw = extractKeywordsFromJD(jd, 'technical')[0] || jd.trim().split(' ')[0] || "Technical";
-            const skills = extractKeywordsFromJD(jd, 'technical').slice(0, 3).join(', ');
-            aiFallbacks[pid] = `<p>${escapeHtml(dynamicSummary(rolePreset, finalJD, rand))}</p>`;
-            aiTypes[pid] = 'summary';
-            aiLabels[pid] = 'Summary';
-         }
-        else if (label === 'Technical Skills') {
-            resumeBodyHtml += `<div class="resume-section-title">Technical Skills</div>`;
-            const pid = `sec_${sectionCounter++}`;
-            const userSkills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(',') : []);
-            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            
-            aiPrompts[pid] = `INTELLIGENT SKILL INFERENCE: Based on role "${finalJD.slice(0, 100)}", infer 10-15 TECHNICAL skills that are: (1) Standard for this role (2) Include programming languages, frameworks, databases, tools (3) NOT copied verbatim from JD (4) Realistic for entry-level. User has: ${userSkills.join(',')}. Include them if relevant. Return comma-separated. Minimum 8 technical skills.`;
-            
-            // DYNAMIC FALLBACK: Use JD TECHNICAL keywords as skills, minimum 8
-            const dynamicSkills = getSmartFallback('skills', finalJD, rand);
-            const relevantUserSkills = userSkills.filter(s => jd.toLowerCase().includes(s.toLowerCase()));
-            let combined = dedupeSkillsLike([...relevantUserSkills, ...dynamicSkills]);
-            
-             // Ensure minimum 8 technical skills
-             while (combined.length < 8) {
-               const extra = extractKeywordsFromJD(jd, 'technical')[combined.length];
-               if (extra) {
-                 const next = normalizeSkillToken(extra);
-                 if (next && !combined.some(x => x.toLowerCase() === next.toLowerCase())) combined.push(next);
-               }
-               else break;
-             }
-             
-            combined = dedupeSkillsLike(combined).slice(0, 15);
-            aiFallbacks[pid] = combined.map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
-            aiTypes[pid] = 'chips';
-            aiLabels[pid] = 'Technical Skills';
-         }
-        else if (label === 'Work Experience') {
-            const experienceSections = (profile.customSections || [])
-               .filter(s => s.type === 'entries' && (s.title.toLowerCase().includes('experience') || s.title.toLowerCase().includes('work')));
-            
-            // Dedupe
-            const uniqueItems = new Map();
-            if (experienceSections.length > 0) {
-                 experienceSections.forEach(sec => {
-                     (sec.items || []).forEach(item => {
-                         if (!uniqueItems.has(item.key)) uniqueItems.set(item.key, { item, secTitle: sec.title });
-                     });
-                 });
-            }
-
-            if (uniqueItems.size > 0) {
-                resumeBodyHtml += `<div class="resume-section-title">Work Experience</div>`;
-                for (const [key, data] of uniqueItems.entries()) {
-                    const { item, secTitle } = data;
-                    const pid = `sec_${sectionCounter++}`;
-                    let companyName = secTitle.toLowerCase().includes('experience') ? "" : secTitle;
-                    resumeBodyHtml += `
-                      <div class="resume-item">
-                        <div class="resume-row"><span class="resume-role">${escapeHtml(item.key)}</span><span class="resume-date">${escapeHtml(item.date || '')}</span></div>
-                        ${companyName ? `<span class="resume-company">${escapeHtml(companyName)}</span>` : ''}
-                        <ul id="${pid}">[${pid}]</ul>
-                      </div>`;
-                    aiPrompts[pid] = `MANDATORY: Rewrite experience bullet for role "${item.key}" to include keywords from: "${finalJD.slice(0,200)}". Format: 2 concise Pipe-separated bullets showing impact.`;
-                    aiFallbacks[pid] = `<li>${escapeHtml(dynamicExperienceBullet(item.key, rolePreset, rand))}</li>`;
-                    aiTypes[pid] = 'list';
-                    aiLabels[pid] = 'Work Experience';
-                 }
-            }
-        }
-        else if (label === 'Projects') {
-             resumeBodyHtml += `<div class="resume-section-title">Projects</div>`;
-             const pid = `sec_${sectionCounter++}`;
-             resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-             
-             const projSec = (profile.customSections || []).find(s => s.title.toLowerCase().includes('project'));
-             if (projSec && projSec.items && projSec.items.length) {
-                  const inputs = projSec.items.slice(0, 2).map(i => `${i.key}: ${i.bullets}`).join(' || ');
-                  aiPrompts[pid] = `INTELLIGENT PROJECT GENERATION: Rewrite 2 projects that MUST: (1) Use technical skills from role "${finalJD.slice(0,100)}" (2) Solve real problems (3) Show measurable impact. CRITICAL VARIETY: pick TWO DIFFERENT domains/industries from this set: FinTech, Healthcare, Retail, Logistics, Manufacturing, Education, Telecom, Travel, Energy. Do NOT use the same domain twice. Avoid repeating common topics like "sales dashboard" and "customer churn" unless explicitly in the input. Input: "${inputs}". Format: "<b>Project Title with Tech Stack:</b> Description with technologies and outcome | <b>Title:</b> Description". Make them connected to the role.`;
-                  aiLabels[pid] = 'Projects';
-             } else {
-                  aiPrompts[pid] = `CREATE 2 REALISTIC ACADEMIC PROJECTS for "${finalJD.slice(0,100)}" role. RULES: (1) MUST use inferred technical skills (2) MUST solve real problems (3) Show technologies used (4) MUST include measurable outcome. CRITICAL VARIETY: pick TWO DIFFERENT industries/domains from: FinTech, Healthcare, Retail, Logistics, Manufacturing, Education, Telecom, Travel, Energy. Do NOT use the same domain twice. Avoid defaulting to "Sales" or "Customer Churn" topics. Format: "<b>Project Name (Domain + Tech Stack):</b> Description with technologies and outcome | <b>Project 2 (Domain + Tech Stack):</b> Description". Entry-level appropriate.`;
-                  aiLabels[pid] = 'Projects';
-             }
-             // Dynamic Fallback
-             aiFallbacks[pid] = getSmartFallback('projects', finalJD, rand).split('|').map(p => `<li>${p.trim()}</li>`).join('');
-             aiTypes[pid] = 'list';
-        }
-        else if (label === 'Education') {
-             resumeBodyHtml += `<div class="resume-section-title">Education</div>`;
-             const eduList = (profile.education && profile.education.length) ? profile.education : (profile.college ? [profile.college] : []);
-             resumeBodyHtml += `<div class="resume-item">`;
-             if (eduList.length > 0) resumeBodyHtml += eduList.map(e => `<div>${escapeHtml(e)}</div>`).join('');
-             else resumeBodyHtml += `<div><i>(Add Education)</i></div>`;
-             resumeBodyHtml += `</div>`;
-        }
-        else if (label === 'Certifications') {
-            resumeBodyHtml += `<div class="resume-section-title">Certifications</div>`;
-            const pid = `sec_${sectionCounter++}`;
-            resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            aiPrompts[pid] = `INTELLIGENT CERTIFICATION GENERATION for "${finalJD.slice(0, 100)}" role. Generate 2 REAL, FULL certification names that: (1) Match the technical skills (2) Are industry-standard (3) Appropriate for entry-level. Examples: "AWS Certified Cloud Practitioner", "Oracle Certified Associate, Java SE 11 Developer", "Microsoft Certified: Azure Fundamentals", "PCEP – Certified Entry-Level Python Programmer". Format: "Full Cert Name | Full Cert Name". NO generic names.`;
-            aiFallbacks[pid] = getSmartFallback('certifications', finalJD, rand).split('|').map(c => `<li>${c.trim()}</li>`).join('');
-            aiTypes[pid] = 'list';
-            aiLabels[pid] = 'Certifications';
-        }
-        else if (label === 'Achievements') {
-            resumeBodyHtml += `<div class="resume-section-title">Achievements</div>`;
-            const pid = `sec_${sectionCounter++}`;
-            resumeBodyHtml += `<div class="resume-item"><ul id="${pid}">[${pid}]</ul></div>`;
-            aiPrompts[pid] = `INTELLIGENT ACHIEVEMENT GENERATION for "${finalJD.slice(0, 100)}" role. Create 2 SPECIFIC, MEASURABLE achievements that: (1) Use technical skills (2) Show quantifiable results (3) Are realistic for freshers. Examples: "Reduced API response time by 35% through caching optimization", "Automated data processing pipeline saving 20 hours/week", "Improved code test coverage from 60% to 85%". Format: "Achievement 1 | Achievement 2". NO generic statements.`;
-            aiFallbacks[pid] = getSmartFallback('achievements', finalJD, rand).split('|').map(a => `<li>${a.trim()}</li>`).join('');
-            aiTypes[pid] = 'list';
-            aiLabels[pid] = 'Achievements';
-        }
-         else {
-            resumeBodyHtml += `<div class="resume-section-title">${escapeHtml(secObj.original)}</div>`;
-            const pid = `sec_${sectionCounter++}`;
-            resumeBodyHtml += `<div class="resume-item" id="${pid}">[${pid}]</div>`;
-            aiPrompts[pid] = `List 6-8 SOFT SKILLS/character traits from this JD: "${finalJD.slice(0,200)}". Examples: Communication, Teamwork, Leadership, Problem Solving. Comma-separated. NO technical skills. Minimum 6.`;
-            
-            // Dynamic Traits from JD SOFT SKILL Keywords - ensure minimum 6
-            let kws = dynamicTraits(finalJD, rand);
-            const fallbackStr = kws.join(' | ');
-            aiFallbacks[pid] = fallbackStr.split('|').map(s => `<span class="skill-tag">${escapeHtml(s.trim())}</span>`).join(' ');
-            aiTypes[pid] = 'chips';
-            aiLabels[pid] = secObj.original;
-         }
-     }
 
     let htmlSkeleton = `
     <div class="generated-resume">
@@ -1229,7 +1118,8 @@ VARIATION_SEED: ${seed}
           else if (typeof val === 'string' && val.trim().length < 2) reason = 'too-short/empty';
           debug.invalidAI[pid] = reason;
 
-          if (noFallback || aiOnly) {
+          // STRICT: mark as missing – do NOT synthesize anything
+          if (noFallback || aiOnly || forceStrict) {
             missing.add(pid);
             return;
           }
@@ -1333,6 +1223,7 @@ VARIATION_SEED: ${seed}
 
         // final fallback
         if (noFallback || aiOnly || forceStrict) {
+          // do NOT inject fallback; just mark missing
           missing.add(pid);
           return;
         }
@@ -1417,19 +1308,18 @@ VARIATION_SEED: ${seed}
         return { parsed, render };
       };
 
-        let aiSuccess = null;
-        let lastErr = null;
-        const seeds = [requestSeed.toString(36), makeSeed().toString(36), makeSeed().toString(36)];
+      let aiSuccess = null;
+      let lastErr = null;
+      const seeds = [requestSeed.toString(36), makeSeed().toString(36), makeSeed().toString(36)];
 
-        for (const s of seeds) {
-          try {
-            aiSuccess = await runAiAttempt(s);
-            break;
+      for (const s of seeds) {
+        try {
+          aiSuccess = await runAiAttempt(s);
+          break;
         } catch (err) {
           lastErr = err;
           debug.lastError = String(err && err.message ? err.message : err);
           if (!forceStrict) break; // in non-strict mode we will fall back below
-       
         }
       }
 
@@ -1442,7 +1332,7 @@ VARIATION_SEED: ${seed}
         if (aiOnly || noFallback || forceStrict) {
           return res.status(503).json({
             ok: false,
-            error: 'AI response invalid; strict mode disallows fallback. Please retry.',
+            error: lastErr ? String(lastErr.message || lastErr) : 'AI response invalid; strict mode disallows fallback.',
             debug
           });
         }
