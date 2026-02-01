@@ -1194,27 +1194,40 @@ VARIATION_SEED: ${seed}
         };
 
         const baseSkeleton = htmlSkeleton;
-        let aiData = null;
-        try {
-          const seed = requestSeed.toString(36);
-          const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
+        const runAiAttempt = async (seedBase36) => {
+          const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seedBase36}`;
           const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
-
           const parsed = tryParseJsonLoose(aiJsonText);
           debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: !!parsed, sample: String(aiJsonText || '').slice(0, 160) });
           if (!parsed) throw new Error('Invalid AI response');
-          aiData = parsed;
-
-          const render = renderFromAiData(aiData, baseSkeleton);
+          const render = renderFromAiData(parsed, baseSkeleton);
           if (render.missing.size && (forceStrict || aiOnly)) {
             throw new Error(`AI missing required sections: ${Array.from(render.missing).join(', ')}`);
           }
-          htmlSkeleton = render.html;
+          return { parsed, render };
+        };
+
+        let aiSuccess = null;
+        let lastErr = null;
+        const seeds = [requestSeed.toString(36), makeSeed().toString(36)];
+
+        for (const s of seeds) {
+          try {
+            aiSuccess = await runAiAttempt(s);
+            break;
+          } catch (err) {
+            lastErr = err;
+            debug.lastError = String(err && err.message ? err.message : err);
+            if (!forceStrict) break; // in non-strict mode we will fall back below
+          }
+        }
+
+        if (aiSuccess) {
+          htmlSkeleton = aiSuccess.render.html;
           cacheKeyToStore = cachingEnabled ? freeTierCacheKey : null;
           shouldCacheResult = !!cacheKeyToStore;
-        } catch (e) {
-          console.error('AI processing failed:', e);
-          const msg = String(e.message || '').toLowerCase();
+        } else {
+          const msg = String(lastErr && lastErr.message ? lastErr.message : '').toLowerCase();
           if (msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota')) {
             refundDailyTicket();
             const seconds = secondsUntilFreeTierReset();
