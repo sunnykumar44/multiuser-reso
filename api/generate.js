@@ -748,7 +748,7 @@ module.exports = async (req, res) => {
     const requestSeed = makeSeed();
     const rand = mulberry32(requestSeed);
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-    const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false, forceFresh = false, useCache = true } = body;
+    const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false, forceFresh = false, useCache = true, forceStrict = false } = body;
     const noFallback = (typeof body.noFallback === 'boolean') ? body.noFallback : true;
     const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
 
@@ -1143,7 +1143,7 @@ VARIATION_SEED: ${seed}
         }
 
         // final fallback
-        if (noFallback || aiOnly) {
+        if (noFallback || aiOnly || forceStrict) {
           missing.add(pid);
           return;
         }
@@ -1206,6 +1206,9 @@ VARIATION_SEED: ${seed}
           aiData = parsed;
 
           const render = renderFromAiData(aiData, baseSkeleton);
+          if (render.missing.size && (forceStrict || aiOnly)) {
+            throw new Error(`AI missing required sections: ${Array.from(render.missing).join(', ')}`);
+          }
           htmlSkeleton = render.html;
           cacheKeyToStore = cachingEnabled ? freeTierCacheKey : null;
           shouldCacheResult = !!cacheKeyToStore;
@@ -1222,6 +1225,10 @@ VARIATION_SEED: ${seed}
               retryAfterSeconds: seconds,
               debug
             });
+          }
+          if (forceStrict) {
+            refundDailyTicket();
+            return res.status(503).json({ ok: false, error: 'AI response invalid; please retry after cooldown', debug });
           }
           Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
           htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);

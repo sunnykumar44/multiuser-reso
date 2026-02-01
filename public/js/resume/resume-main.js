@@ -381,12 +381,26 @@ function uniqByLower(arr) {
   return out;
 }
 
+// --------------------
+// Normalize section titles so UI scope matches server scope canonicalization
+// (prevents "Skills" vs "Technical Skills" vs "Experience" mismatches)
+// --------------------
+function normalizeScopeTitleForServer(t) {
+  const s = String(t || '').trim().toLowerCase();
+  if (!s) return '';
+  if (s === 'skills') return 'Technical Skills';
+  if (s === 'technical skills') return 'Technical Skills';
+  if (s === 'experience' || s === 'work' || s === 'work experience') return 'Work Experience';
+  if (s === 'traits' || s === 'soft skills' || s === 'character') return 'Character Traits';
+  return titleCase(t);
+}
+
 function getScopeFromUI() {
   const list = $("ai-scope-list");
   const checkboxes = list ? list.querySelectorAll("input[type=checkbox]") : [];
   const scope = [];
   checkboxes.forEach((cb) => {
-    if (cb.checked) scope.push(cb.value);
+    if (cb.checked) scope.push(normalizeScopeTitleForServer(cb.value));
   });
   return scope;
 }
@@ -879,7 +893,6 @@ function triggerFreeTierCooldown(btn) {
   const btn = $('btnGen');
   if (!btn) return;
 
-  // Prevent double-binding if this module is evaluated twice.
   if (btn.__serverGenWired) return;
   btn.__serverGenWired = true;
 
@@ -892,14 +905,20 @@ function triggerFreeTierCooldown(btn) {
       showToast(FREE_TIER_MESSAGE, 'warn');
       return;
     }
+
     try {
       e.preventDefault();
-      const jd = $('jd')?.value || '';
+
+      const jdNow = $('jd')?.value || '';
+      if (!jdNow.trim()) {
+        setStatus('Paste a job description first.', 'err');
+        return;
+      }
+
       const mode = getActive('modes', 'data-mode') || 'ats';
       const template = getActive('templates', 'data-template') || 'classic';
-      const scope = typeof getScopeFromUI === 'function' ? getScopeFromUI() : [];
+      const scope = getScopeFromUI(); // normalized titles
 
-      // Read latest unlockedProfile from sessionStorage at click time
       const rawNow = sessionStorage.getItem('unlockedProfile');
       if (!rawNow) {
         setStatus('Locked. Unlock first.', 'err');
@@ -911,14 +930,10 @@ function triggerFreeTierCooldown(btn) {
         return;
       }
 
-      const jdNow = $('jd')?.value || '';
-      if (!jdNow.trim()) {
-        setStatus('Paste a job description first.', 'err');
-        return;
-      }
-
-      // determine effective nickname (prefer unlockedNickname, then profile, then anon)
-      const effectiveNickname = sessionStorage.getItem('unlockedNickname') || (currentProfile && (currentProfile.nickname || currentProfile.fullName)) || 'anon';
+      const effectiveNickname =
+        sessionStorage.getItem('unlockedNickname') ||
+        (currentProfile && (currentProfile.nickname || currentProfile.fullName)) ||
+        'anon';
 
       setStatus('Generating via server...');
       const result = await callGenerateAPI({
@@ -928,71 +943,50 @@ function triggerFreeTierCooldown(btn) {
         template,
         scope,
         nickname: effectiveNickname,
-        forceFresh: true,   // always request a fresh generation (no cache)
-        useCache: false
+        forceFresh: true,
+        useCache: false,
+        forceStrict: true,
       });
 
-      // Support multiple server response shapes: { generated: { html } }, { resume }, or legacy
       let serverHtml = null;
-      try {
-        if (!result) throw new Error('Empty server response');
-        if (result.generated && result.generated.html) serverHtml = result.generated.html;
-        else if (result.resume) serverHtml = result.resume;
-        else if (result.html) serverHtml = result.html;
-        else if (result.generatedHtml) serverHtml = result.generatedHtml;
-        else if (result.page) serverHtml = result.page;
-      } catch (e) {
-        console.warn('Unable to parse server response', e, result);
+      if (result?.generated?.html) serverHtml = result.generated.html;
+      else if (result?.html) serverHtml = result.html;
+
+      if (!serverHtml) throw new Error('Server returned no usable HTML');
+
+      // Persist UI -> draft + store HTML override (this is the "generated resume")
+      draft.jd = jdNow;
+      draft.mode = mode;
+      draft.template = template;
+      draft.scope = scope;
+      draft.htmlOverride = String(serverHtml || '');
+      saveDraft(draft);
+
+      // Render returned HTML, allow editing
+      if (paperEl) {
+        paperEl.innerHTML = draft.htmlOverride;
+        try { paperEl.contentEditable = true; } catch (_) {}
+        enableInlineEditing(paperEl);
       }
 
-      if (serverHtml) {
-        // Persist current UI -> draft settings
-        draft.jd = jdNow;
-        draft.mode = mode;
-        draft.template = template;
-        draft.scope = scope;
+      pendingHtmlOverride = null;
+      lastSavedHtmlOverride = null;
+      const saveBtn = $('btnSaveEdits');
+      if (saveBtn) saveBtn.classList.remove('unsaved');
 
-        draft.htmlOverride = String(serverHtml || '');
-        saveDraft(draft);
-
-        if (paperEl) {
-          try {
-            paperEl.innerHTML = draft.htmlOverride;
-            try { paperEl.contentEditable = true; } catch (_) {}
-            enableInlineEditing(paperEl);
-          } catch (e) {
-            paperEl.innerHTML = draft.htmlOverride;
-            try { paperEl.contentEditable = true; } catch (_) {}
-            enableInlineEditing(paperEl);
-          }
-        }
-
-        updateEditBadge();
-        setStatus('Generated (server)', 'ok');
-        showToast('Generated', 'success', 1600);
-      } else {
-        // fallback
-        setStatus('Server returned no usable HTML; using local fallback', 'err');
-        showToast('Using local fallback', 'warn');
-
-        const fallbackHtml = clientBuildFallback(currentProfile, jdNow, mode, template, scope, effectiveNickname);
-        draft.htmlOverride = fallbackHtml;
-        saveDraft(draft);
-        if (paperEl) {
-          paperEl.innerHTML = draft.htmlOverride;
-          try { paperEl.contentEditable = true; } catch (_) {}
-          enableInlineEditing(paperEl);
-        }
-        updateEditBadge();
-      }
+      updateEditBadge();
+      setStatus('Generated (server)', 'ok');
+      showToast('Generated', 'success', 1600);
     } catch (err) {
       console.error('Generate click error:', err);
-      if (err.status === 429 || (err.data && String(err.data.error || '').toLowerCase().includes('daily'))) {
+
+      if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
         triggerFreeTierCooldown(btn);
         setStatus(FREE_TIER_MESSAGE, 'err');
         showToast(FREE_TIER_MESSAGE, 'warn');
         return;
       }
+
       setStatus('Generation failed', 'err');
       showToast('Generation failed', 'err');
     }
@@ -1414,6 +1408,13 @@ try {
           });
           enableInlineEditing(paper);
         }
+      } catch (e) {
+        console.warn('post-generate profile rerender failed', e);
+      }
+    }, 0);
+  }, true);
+})();
+//# sourceMappingURL=resume-main.js.map
       } catch (e) {
         console.warn('post-generate profile rerender failed', e);
       }
