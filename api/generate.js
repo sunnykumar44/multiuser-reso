@@ -1267,6 +1267,39 @@ VARIATION_SEED: ${seed}
       return { html: htmlOut, missing };
     }
 
+    // --------------------
+    // Build sectionsToRender from incoming scope (UI checkboxes) or sensible defaults.
+    // --------------------
+    const priority = [
+      'Summary',
+      'Technical Skills',
+      'Work Experience',
+      'Projects',
+      'Education',
+      'Certifications',
+      'Achievements',
+      'Character Traits',
+    ];
+
+    let sectionsToRender = [];
+
+
+    if (Array.isArray(scope) && scope.length) {
+      // Use client-provided scope, normalize via canonicalSectionName
+      const seen = new Set();
+      for (const rawTitle of scope) {
+        const canon = canonicalSectionName(rawTitle);
+        if (!canon) continue;
+        const key = canon.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        sectionsToRender.push({ original: rawTitle, canonical: canon });
+      }
+    } else {
+      // No explicit scope → default to the standard set
+      sectionsToRender = priority.map((name) => ({ original: name, canonical: name }));
+    }
+
     sectionsToRender.sort((a, b) => {
         const ia = priority.indexOf(a.canonical);
         const ib = priority.indexOf(b.canonical);
