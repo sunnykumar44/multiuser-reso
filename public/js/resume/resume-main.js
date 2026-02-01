@@ -807,15 +807,71 @@ async function callGenerateAPI(payload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) {
-      const txt = await res.text().catch(() => '');
-      throw new Error('Generate API error: ' + res.status + ' ' + txt);
+    const text = await res.text().catch(() => '');
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch (__) {
+      json = null;
     }
-    return await res.json();
+    if (!res.ok) {
+      const error = new Error(json?.error || `Generate API error: ${res.status}`);
+      error.status = res.status;
+      error.data = json;
+      error.rawText = text;
+      throw error;
+    }
+    if (!json) {
+      throw new Error('Empty server response');
+    }
+    return json;
   } catch (err) {
     console.error('callGenerateAPI error:', err);
     throw err;
   }
+}
+
+const FREE_TIER_COOLDOWN_KEY = 'geminiFreeTierCooldownUntil';
+const FREE_TIER_MESSAGE = 'Free daily limit reached. Try again after 1:30 PM IST.';
+
+function getNextFreeTierResetTimestamp() {
+  const now = new Date();
+  const reset = new Date(now);
+  reset.setUTCHours(8, 0, 0, 0); // 08:00 UTC (midnight Pacific)
+  if (reset.getTime() <= now.getTime()) {
+    reset.setUTCDate(reset.getUTCDate() + 1);
+  }
+  return reset.getTime();
+}
+
+function getStoredFreeTierCooldown() {
+  if (typeof localStorage === 'undefined') return 0;
+  const raw = localStorage.getItem(FREE_TIER_COOLDOWN_KEY);
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function isFreeTierCooldownActive() {
+  return getStoredFreeTierCooldown() > Date.now();
+}
+
+function applyFreeTierCooldownState(btn) {
+  const active = isFreeTierCooldownActive();
+  if (btn) {
+    btn.disabled = active;
+    btn.dataset.freeTierCooldown = active ? '1' : '0';
+  }
+}
+
+function triggerFreeTierCooldown(btn) {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(FREE_TIER_COOLDOWN_KEY, String(getNextFreeTierResetTimestamp()));
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset.freeTierCooldown = '1';
+  }
+  return getStoredFreeTierCooldown();
 }
 
 // Wire the existing Generate button to call the server and render returned HTML
@@ -827,7 +883,15 @@ async function callGenerateAPI(payload) {
   if (btn.__serverGenWired) return;
   btn.__serverGenWired = true;
 
+  applyFreeTierCooldownState(btn);
+  setInterval(() => applyFreeTierCooldownState(btn), 60000);
+
   btn.addEventListener('click', async (e) => {
+    if (isFreeTierCooldownActive()) {
+      setStatus(FREE_TIER_MESSAGE, 'err');
+      showToast(FREE_TIER_MESSAGE, 'warn');
+      return;
+    }
     try {
       e.preventDefault();
       const jd = $('jd')?.value || '';
@@ -914,6 +978,12 @@ async function callGenerateAPI(payload) {
       }
     } catch (err) {
       console.error('Generate click error:', err);
+      if (err.status === 429 || (err.data && String(err.data.error || '').toLowerCase().includes('daily'))) {
+        triggerFreeTierCooldown(btn);
+        setStatus(FREE_TIER_MESSAGE, 'err');
+        showToast(FREE_TIER_MESSAGE, 'warn');
+        return;
+      }
       setStatus('Generation failed', 'err');
       showToast('Generation failed', 'err');
     }

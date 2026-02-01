@@ -1,6 +1,34 @@
 const { saveHistory } = require("./firebase");
 const crypto = require('crypto');
 
+const GEMINI_FREE_MODEL = process.env.GEMINI_FREE_MODEL || 'models/gemini-1.5-flash';
+const GEMINI_FREE_TEMPERATURE = Number(process.env.GEMINI_FREE_TEMPERATURE) || 0.95;
+const FREE_CACHE_MAX_ENTRIES = Number(process.env.FREE_CACHE_MAX_ENTRIES) || 500;
+globalThis.__FREE_GEMINI_CACHE__ = globalThis.__FREE_GEMINI_CACHE__ || new Map();
+const FREE_GEMINI_CACHE = globalThis.__FREE_GEMINI_CACHE__;
+
+function buildFreeCacheKey(profile = {}, jd = '') {
+  return JSON.stringify({
+    jd: String(jd || '').trim(),
+    skills: Array.isArray(profile.skills) ? profile.skills : [],
+    role: profile.role || profile.title || profile.position || '',
+  });
+}
+
+function getCachedHtml(key) {
+  if (!key) return null;
+  return FREE_GEMINI_CACHE.get(key) || null;
+}
+
+function storeCachedHtml(key, html) {
+  if (!key || !html || typeof html !== 'string') return;
+  if (FREE_GEMINI_CACHE.size >= FREE_CACHE_MAX_ENTRIES) {
+    const oldest = FREE_GEMINI_CACHE.keys().next().value;
+    if (oldest) FREE_GEMINI_CACHE.delete(oldest);
+  }
+  FREE_GEMINI_CACHE.set(key, html);
+}
+
 // Simple in-memory daily limiter (resets when date changes; per server instance)
 const DAILY_LIMIT = Number(process.env.DAILY_LIMIT || 20);
 globalThis.__DAILY_LIMIT_STATE__ = globalThis.__DAILY_LIMIT_STATE__ || { date: null, byUser: new Map() };
@@ -53,6 +81,16 @@ function parseRetryDelayMs(txt) {
   } catch (_) {
     return 0;
   }
+}
+
+function secondsUntilFreeTierReset() {
+  const now = new Date();
+  const reset = new Date(now);
+  reset.setUTCHours(8, 0, 0, 0); // 08:00 UTC == midnight Pacific
+  if (reset.getTime() <= now.getTime()) {
+    reset.setUTCDate(reset.getUTCDate() + 1);
+  }
+  return Math.max(0, Math.ceil((reset.getTime() - now.getTime()) / 1000));
 }
 
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
@@ -560,126 +598,36 @@ async function callGeminiFlash(promptText, opts = {}) {
 
   const base = `https://generativelanguage.googleapis.com/v1beta`;
   const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
-
-  // Cache model choice for this server instance to avoid ListModels on every request
-  globalThis.__GEMINI_TEXT_MODELS__ = globalThis.__GEMINI_TEXT_MODELS__ || null;
-
-  async function listModels() {
-    const resp = await fetch(`${base}/models?${keyQs}`, { method: 'GET' });
-    if (!resp.ok) return null;
-    const j = await resp.json().catch(() => null);
-    return j;
-  }
-
-  async function pickModels() {
-    const fallback = [
-      'models/gemini-1.5-flash-002',
-      'models/gemini-1.5-flash',
-      'models/gemini-1.5-pro',
-      'models/gemini-1.0-pro'
-    ];
-
-    // Put preferred model first if provided
-    const preferredFromEnv = GEMINI_MODEL_PREFERRED
-      ? (GEMINI_MODEL_PREFERRED.startsWith('models/') ? GEMINI_MODEL_PREFERRED : `models/${GEMINI_MODEL_PREFERRED}`)
-      : '';
-
-    if (Array.isArray(globalThis.__GEMINI_TEXT_MODELS__) && globalThis.__GEMINI_TEXT_MODELS__.length) {
-      return globalThis.__GEMINI_TEXT_MODELS__;
-    }
-
-    const j = await listModels();
-    const models = (j && Array.isArray(j.models)) ? j.models : [];
-    const names = models.map(m => m && m.name).filter(Boolean);
-    if (!names.length) {
-      const picked = preferredFromEnv ? [preferredFromEnv, ...fallback] : fallback;
-      globalThis.__GEMINI_TEXT_MODELS__ = picked;
-      return picked;
-    }
-
-    // Exclude image/vision models
-    const textOnly = names.filter(n => n.includes('gemini') && !n.includes('image') && !n.includes('vision') && !n.includes('audio') && !n.includes('native-audio'));
-    const preferred = textOnly.filter(n => n.includes('flash') || n.includes('pro'));
-    let picked = preferred.length ? preferred : (textOnly.length ? textOnly : fallback);
-    if (preferredFromEnv && !preferredFromEnv.includes('audio') && !preferredFromEnv.includes('native-audio')) {
-      // Ensure preferred model is tried first
-      picked = [preferredFromEnv, ...picked.filter(n => n !== preferredFromEnv)];
-    }
-
-    globalThis.__GEMINI_TEXT_MODELS__ = picked;
-    return picked;
-  }
-
-  const candidatesModels = await pickModels();
-
-  const temperature = (typeof opts.temperature === 'number') ? opts.temperature : 0.9;
-  const topP = (typeof opts.topP === 'number') ? opts.topP : 0.95;
+  const modelName = GEMINI_FREE_MODEL.startsWith('models/') ? GEMINI_FREE_MODEL : `models/${GEMINI_FREE_MODEL}`;
+  const url = `${base}/${modelName}:generateContent?${keyQs}`;
+  const temperature = (typeof opts.temperature === 'number') ? opts.temperature : GEMINI_FREE_TEMPERATURE;
   const maxOutputTokens = opts.maxOutputTokens || 2600;
 
-  function buildBody(withPenalty) {
-    const gen = {
+  const body = {
+    contents: [{ parts: [{ text: promptText }] }],
+    generationConfig: {
       temperature,
-      topP,
+      topP: 0.95,
       maxOutputTokens,
       responseMimeType: "application/json"
-    };
-
-    if (withPenalty) {
-      gen.presencePenalty = (typeof opts.presencePenalty === 'number') ? opts.presencePenalty : 0.6;
-      gen.frequencyPenalty = (typeof opts.frequencyPenalty === 'number') ? opts.frequencyPenalty : 0.4;
     }
+  };
 
-    return {
-      contents: [{ parts: [{ text: promptText }] }],
-      generationConfig: gen
-    };
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => '');
+    throw new Error(`Gemini API failed ${resp.status}: ${txt}`);
   }
 
-  let lastErr = null;
-  for (const modelName of candidatesModels) {
-    const url = `${base}/${modelName}:generateContent?${keyQs}`;
-    const body = buildBody(!opts.__noPenalty);
-
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => '');
-
-      // If this model doesn't support penalties, retry once without penalties
-      if (resp.status === 400 && /Penalty is not enabled for this model/i.test(txt) && !opts.__noPenalty) {
-        return callGeminiFlash(promptText, Object.assign({}, opts, { __noPenalty: true }));
-      }
-
-      // Optional single retry on 429 (rate limit) honoring retryDelay
-      if (resp.status === 429 && opts.noRetryOn429) {
-        throw new Error(`Gemini API failed 429: ${txt}`);
-      }
-      if (resp.status === 429 && !opts.__retriedOnce) {
-        const ms = parseRetryDelayMs(txt);
-        if (ms > 0 && ms <= 30000) {
-          await sleep(ms);
-          return callGeminiFlash(promptText, Object.assign({}, opts, { __retriedOnce: true }));
-        }
-      }
-
-      lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
-      continue;
-    }
-
-    const j = await resp.json();
-    const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!candidate) {
-      lastErr = new Error('No response from AI');
-      continue;
-    }
-    return candidate;
-  }
-
-  throw lastErr || new Error('Gemini API failed');
+  const j = await resp.json();
+  const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!candidate) throw new Error('No response from AI');
+  return candidate;
 }
 
 function normalizeJD(jdRaw = '') {
@@ -1191,7 +1139,22 @@ VARIATION_SEED: ${seed}
       return { html: htmlOut, missing };
     }
 
+    const freeTierCacheKey = finalJD ? buildFreeCacheKey(profile, finalJD) : null;
+    let cacheKeyToStore = null;
+    let shouldCacheResult = false;
+
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
+        const cachedHtml = freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
+        if (cachedHtml) {
+          debug.cacheHit = true;
+          return res.status(200).json({
+            ok: true,
+            generated: { html: cachedHtml },
+            cached: true,
+            debug
+          });
+        }
+
         // Enforce local daily limit only when AI is requested
         const ticket = consumeOne(userKey);
         debug.daily = ticket;
@@ -1213,102 +1176,43 @@ VARIATION_SEED: ${seed}
           } catch (_) {}
         };
 
-         // try AI with retries for short JD to encourage variability
-         const temps = (finalJD && finalJD.trim().length < 50) ? [0.95, 1.05, 1.15] : [0.9, 1.0];
-         let aiData = null;
-         let lastError = null;
-         let rateLimited = false;
-         for (const t of temps) {
-            try {
-                const seed = requestSeed.toString(36);
-                const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
-                const aiJsonText = await callGeminiFlash(prompt, { temperature: t, topP: 0.95, maxOutputTokens: 3000, noRetryOn429: true });
-                try { aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim()); debug.attempts.push({ temp: t, parsed: true }); } catch (e) { aiData = null; debug.attempts.push({ temp: t, parsed: false, error: e.message }); }
-                if (aiData) break;
-            } catch (e) {
-                lastError = e;
-                debug.attempts.push({ temp: t, parsed: false, error: e.message });
-
-                // If Gemini is rate-limiting, don't spin; fall back immediately
-                const msg = String(e && e.message ? e.message : '');
-                const retryMs = parseRetryDelayMs(msg);
-                if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
-
-                // If Gemini is rate-limiting, don't spin; fall back immediately
-                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                  refundDailyTicket();
-                  rateLimited = true;
-                   break;
-                 }
-            }
-         }
-         if (rateLimited) {
-           return res.status(429).json({
-             ok: false,
-             error: 'Gemini quota/rate limit exceeded. Please wait and try again.',
-             debug
-           });
-         }
-
-         try {
-             if (!aiData) throw lastError || new Error('No AI data returned');
-
-             const baseSkeleton = htmlSkeleton;
-             let render = renderFromAiData(aiData, baseSkeleton);
-
-             if (render.missing.size && (noFallback || aiOnly)) {
-               // Retry only missing sections with a repair prompt (up to 2 attempts)
-               let repaired = false;
-               const missingPids = Array.from(render.missing);
-               const repairAttempts = [makeSeed().toString(36), makeSeed().toString(36)];
-
-               for (const seed of repairAttempts) {
-                 try {
-                   const repairPrompt = buildRepairPrompt(missingPids, seed);
-                   const repairText = await callGeminiFlash(repairPrompt, { temperature: 1.05, topP: 0.95, maxOutputTokens: 1800 });
-                   const repairData = JSON.parse(repairText.replace(/```json|```/g, '').trim());
-                   aiData = Object.assign({}, aiData, repairData);
-                   render = renderFromAiData(aiData, baseSkeleton);
-                   if (!render.missing.size) { repaired = true; break; }
-                 } catch (e) {
-                   debug.attempts.push({ temp: 'repair', parsed: false, error: String(e && e.message ? e.message : e) });
-                 }
-               }
-
-               if (!repaired && render.missing.size) {
-                 throw new Error(`AI missing required sections: ${Array.from(render.missing).join(', ')}`);
-               }
-             }
-
-             htmlSkeleton = render.html;
-         } catch (e) {
-             console.error('AI processing failed:', e);
-             if (aiOnly || noFallback) {
-               const msg = String(e.message || 'AI failed');
-               if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                  const retryMs = parseRetryDelayMs(msg);
-                  if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
-                  refundDailyTicket();
-                  return res.status(429).json({ ok: false, error: 'Gemini quota/rate limit exceeded. Please wait and try again.', debug });
-               }
-               return res.status(503).json({ ok: false, error: msg, debug });
-             }
-            // If quota/rate-limited, do not burn daily counter
-            {
-              const msg = String(e && e.message ? e.message : '');
-              if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
-                const retryMs = parseRetryDelayMs(msg);
-                if (retryMs > 0) debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, Math.ceil(retryMs / 1000));
-                refundDailyTicket();
-              }
-            }
-             Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
-             // Ensure fallback still looks dynamic per request
-             htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
-         }
-     } else {
-          if (aiOnly || noFallback) {
-            const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
+        const baseSkeleton = htmlSkeleton;
+        let aiData = null;
+        try {
+          const seed = requestSeed.toString(36);
+          const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
+          const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
+          try {
+            aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim());
+            debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: true });
+          } catch (parseErr) {
+            debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: false, error: parseErr.message });
+            throw new Error('Invalid AI response');
+          }
+          const render = renderFromAiData(aiData, baseSkeleton);
+          htmlSkeleton = render.html;
+          cacheKeyToStore = freeTierCacheKey;
+          shouldCacheResult = !!cacheKeyToStore;
+        } catch (e) {
+          console.error('AI processing failed:', e);
+          const msg = String(e.message || '').toLowerCase();
+          if (msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota')) {
+            refundDailyTicket();
+            const seconds = secondsUntilFreeTierReset();
+            debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, seconds);
+            return res.status(429).json({
+              ok: false,
+              error: 'Daily free-tier limit reached. Try again after 1:30 PM IST.',
+              retryAfterSeconds: seconds,
+              debug
+            });
+          }
+          Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
+          htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
+        }
+    } else {
+         if (aiOnly || noFallback) {
+           const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
             return res.status(503).json({ ok: false, error: reason, debug });
           }
           Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
@@ -1354,6 +1258,12 @@ VARIATION_SEED: ${seed}
         htmlSkeleton = ensureEducationInHtml({ html: htmlSkeleton, profile: _p });
       }
     } catch (_) {}
+
+    if (shouldCacheResult && cacheKeyToStore) {
+      storeCachedHtml(cacheKeyToStore, htmlSkeleton);
+      debug.cached = true;
+      debug.cacheKey = cacheKeyToStore;
+    }
 
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
