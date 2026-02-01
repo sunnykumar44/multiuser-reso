@@ -1364,12 +1364,35 @@ VARIATION_SEED: ${seed}
 
     // If, for any reason, no aiPrompts were defined, abort cleanly with a clear error
     if (!Object.keys(aiPrompts).length) {
+      const debug = Object.assign({}, debugBase, {
+        attempts: [],
+        usedFallbackFor: [],
+        invalidAI: {},
+        fallbackNote: '',
+        retryAfterSeconds: 0,
+        finalJD,
+        daily: remainingInfo,
+        jdWasInferred,
+        jdNormalized,
+      });
       return res.status(400).json({
         ok: false,
         error: 'No AI sections were requested (empty scope / no prompts). At least one section such as Summary must be enabled.',
         debug
       });
     }
+
+    const debug = Object.assign({}, debugBase, {
+      attempts: [],
+      usedFallbackFor: [],
+      invalidAI: {},
+      fallbackNote: '',
+      retryAfterSeconds: 0,
+      finalJD,
+      daily: remainingInfo,
+      jdWasInferred,
+      jdNormalized,
+    });
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && hasKey) {
       const cachedHtml = cachingEnabled && freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
