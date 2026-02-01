@@ -1415,10 +1415,3 @@ try {
   }, true);
 })();
 //# sourceMappingURL=resume-main.js.map
-      } catch (e) {
-        console.warn('post-generate profile rerender failed', e);
-      }
-    }, 0);
-  }, true);
-})();
-//# sourceMappingURL=resume-main.js.map
