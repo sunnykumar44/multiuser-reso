@@ -1230,14 +1230,14 @@ VARIATION_SEED: ${seed}
         return { parsed, render };
       };
 
-      let aiSuccess = null;
-      let lastErr = null;
-      const seeds = [requestSeed.toString(36), makeSeed().toString(36)];
+        let aiSuccess = null;
+        let lastErr = null;
+        const seeds = [requestSeed.toString(36), makeSeed().toString(36), makeSeed().toString(36)];
 
-      for (const s of seeds) {
-        try {
-          aiSuccess = await runAiAttempt(s);
-          break;
+        for (const s of seeds) {
+          try {
+            aiSuccess = await runAiAttempt(s);
+            break;
         } catch (err) {
           lastErr = err;
           debug.lastError = String(err && err.message ? err.message : err);
