@@ -617,7 +617,10 @@ function augmentAchievements(parts, rolePreset) {
 async function callGeminiFlash(promptText, opts = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
 
-  const base = `https://generativelanguage.googleapis.com/v1beta`;
+  const bases = [
+    `https://generativelanguage.googleapis.com/v1`,
+    `https://generativelanguage.googleapis.com/v1beta`
+  ];
   const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const candidates = GEMINI_FREE_MODELS;
   const temperature = (typeof opts.temperature === 'number') ? opts.temperature : GEMINI_FREE_TEMPERATURE;
@@ -636,27 +639,28 @@ async function callGeminiFlash(promptText, opts = {}) {
   let lastErr = null;
   for (const modelName of candidates) {
     const name = modelName.startsWith('models/') ? modelName : `models/${modelName}`;
-    const url = `${base}/${name}:generateContent?${keyQs}`;
+    for (const base of bases) {
+      const url = `${base}/${name}:generateContent?${keyQs}`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
 
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => '');
+        lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
+        continue;
+      }
 
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => '');
-      lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
-      continue;
+      const j = await resp.json();
+      const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!candidate) {
+        lastErr = new Error('No response from AI');
+        continue;
+      }
+      return candidate;
     }
-
-    const j = await resp.json();
-    const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!candidate) {
-      lastErr = new Error('No response from AI');
-      continue;
-    }
-    return candidate;
   }
 
   throw lastErr || new Error('Gemini API failed');
