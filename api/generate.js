@@ -581,6 +581,16 @@ function shuffleSeeded(arr, rand) {
 function randomFromSeeded(arr, rand) { return arr[Math.floor(rand() * arr.length)]; }
 function randomPercentSeeded(rand, min = 10, max = 40) { return Math.floor(rand() * (max - min + 1)) + min; }
 
+// Ensure project bullets mention tech + impact when missing
+function augmentProjectIfNeeded(text, rolePreset, rand = Math.random) {
+  const t = String(text || '').trim();
+  if (!t) return t;
+  if (/\b(using|built|developed|implemented|deployed)\b/i.test(t)) return t;
+  const tech = randomFromSeeded(rolePreset?.skills || ['Python'], rand);
+  const pct = randomPercentSeeded(rand, 10, 40);
+  return `${t} Built using ${tech}. Achieved ~${pct}% improvement.`;
+}
+
 // Add simple non-seeded random helper used by augmentCerts / augmentAchievements
 function randomFrom(arr) {
   const a = Array.isArray(arr) ? arr : [];
