@@ -95,6 +95,20 @@ function secondsUntilFreeTierReset() {
   return Math.max(0, Math.ceil((reset.getTime() - now.getTime()) / 1000));
 }
 
+// Attempt to parse JSON, falling back to extracting the first {...} block
+function tryParseJsonLoose(text) {
+  if (!text) return null;
+  const clean = String(text).replace(/```json|```/gi, '').trim();
+  try { return JSON.parse(clean); } catch (_) {}
+  const first = clean.indexOf('{');
+  const last = clean.lastIndexOf('}');
+  if (first !== -1 && last !== -1 && last > first) {
+    const slice = clean.slice(first, last + 1);
+    try { return JSON.parse(slice); } catch (_) {}
+  }
+  return null;
+}
+
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
 // Extracts meaningful technical and soft skills from JD
 function extractKeywordsFromJD(jd, type = 'all') {
@@ -734,7 +748,7 @@ module.exports = async (req, res) => {
     const requestSeed = makeSeed();
     const rand = mulberry32(requestSeed);
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-    const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false } = body;
+    const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false, forceFresh = false, useCache = true } = body;
     const noFallback = (typeof body.noFallback === 'boolean') ? body.noFallback : true;
     const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
 
@@ -1142,11 +1156,12 @@ VARIATION_SEED: ${seed}
     }
 
     const freeTierCacheKey = finalJD ? buildFreeCacheKey(profile, finalJD) : null;
+    const cachingEnabled = useCache && !forceFresh;
     let cacheKeyToStore = null;
     let shouldCacheResult = false;
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
-        const cachedHtml = freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
+        const cachedHtml = cachingEnabled && freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
         if (cachedHtml) {
           debug.cacheHit = true;
           return res.status(200).json({
@@ -1184,16 +1199,15 @@ VARIATION_SEED: ${seed}
           const seed = requestSeed.toString(36);
           const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seed}`;
           const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
-          try {
-            aiData = JSON.parse(aiJsonText.replace(/```json|```/g, '').trim());
-            debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: true });
-          } catch (parseErr) {
-            debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: false, error: parseErr.message });
-            throw new Error('Invalid AI response');
-          }
+
+          const parsed = tryParseJsonLoose(aiJsonText);
+          debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: !!parsed, sample: String(aiJsonText || '').slice(0, 160) });
+          if (!parsed) throw new Error('Invalid AI response');
+          aiData = parsed;
+
           const render = renderFromAiData(aiData, baseSkeleton);
           htmlSkeleton = render.html;
-          cacheKeyToStore = freeTierCacheKey;
+          cacheKeyToStore = cachingEnabled ? freeTierCacheKey : null;
           shouldCacheResult = !!cacheKeyToStore;
         } catch (e) {
           console.error('AI processing failed:', e);

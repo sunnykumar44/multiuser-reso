@@ -921,7 +921,16 @@ function triggerFreeTierCooldown(btn) {
       const effectiveNickname = sessionStorage.getItem('unlockedNickname') || (currentProfile && (currentProfile.nickname || currentProfile.fullName)) || 'anon';
 
       setStatus('Generating via server...');
-      const result = await callGenerateAPI({ profile: currentProfile, jd: jdNow, mode, template, scope, nickname: effectiveNickname });
+      const result = await callGenerateAPI({
+        profile: currentProfile,
+        jd: jdNow,
+        mode,
+        template,
+        scope,
+        nickname: effectiveNickname,
+        forceFresh: true,   // always request a fresh generation (no cache)
+        useCache: false
+      });
 
       // Support multiple server response shapes: { generated: { html } }, { resume }, or legacy
       let serverHtml = null;
