@@ -1,9 +1,14 @@
 const { saveHistory } = require("./firebase");
 const crypto = require('crypto');
 
-// Hard-lock to the free-tier-safe model; ignore env overrides to prevent accidental pro usage.
-// NOTE: Changing this model requires a deliberate code change (not an env var) to avoid quota burn.
-const GEMINI_FREE_MODEL = 'models/gemini-1.5-flash';
+// Hard-lock to free-tier-capable models; ignore env overrides to prevent accidental pro usage.
+// Ordered list: try each until one works (handles Google deprecations).
+const GEMINI_FREE_MODELS = [
+  'models/gemini-2.5-flash',
+  'models/gemini-2.5-flash-lite',
+  'models/gemini-1.5-flash-002',
+  'models/gemini-1.5-flash',
+];
 const GEMINI_FREE_TEMPERATURE = 0.95;
 const FREE_CACHE_MAX_ENTRIES = Number(process.env.FREE_CACHE_MAX_ENTRIES) || 500;
 globalThis.__FREE_GEMINI_CACHE__ = globalThis.__FREE_GEMINI_CACHE__ || new Map();
@@ -614,8 +619,7 @@ async function callGeminiFlash(promptText, opts = {}) {
 
   const base = `https://generativelanguage.googleapis.com/v1beta`;
   const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  const modelName = GEMINI_FREE_MODEL.startsWith('models/') ? GEMINI_FREE_MODEL : `models/${GEMINI_FREE_MODEL}`;
-  const url = `${base}/${modelName}:generateContent?${keyQs}`;
+  const candidates = GEMINI_FREE_MODELS;
   const temperature = (typeof opts.temperature === 'number') ? opts.temperature : GEMINI_FREE_TEMPERATURE;
   const maxOutputTokens = opts.maxOutputTokens || 2600;
 
@@ -629,21 +633,33 @@ async function callGeminiFlash(promptText, opts = {}) {
     }
   };
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let lastErr = null;
+  for (const modelName of candidates) {
+    const name = modelName.startsWith('models/') ? modelName : `models/${modelName}`;
+    const url = `${base}/${name}:generateContent?${keyQs}`;
 
-  if (!resp.ok) {
-    const txt = await resp.text().catch(() => '');
-    throw new Error(`Gemini API failed ${resp.status}: ${txt}`);
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
+      continue;
+    }
+
+    const j = await resp.json();
+    const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!candidate) {
+      lastErr = new Error('No response from AI');
+      continue;
+    }
+    return candidate;
   }
 
-  const j = await resp.json();
-  const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!candidate) throw new Error('No response from AI');
-  return candidate;
+  throw lastErr || new Error('Gemini API failed');
 }
 
 function normalizeJD(jdRaw = '') {
