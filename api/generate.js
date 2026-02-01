@@ -1101,6 +1101,19 @@ VARIATION_SEED: ${seed}
 `;
     }
 
+    // Debug object (single source of truth) shared across render/AI pipeline
+    const debug = Object.assign({}, debugBase, {
+      attempts: [],
+      usedFallbackFor: [],
+      invalidAI: {},
+      fallbackNote: '',
+      retryAfterSeconds: 0,
+      finalJD,
+      daily: remainingInfo,
+      jdWasInferred,
+      jdNormalized,
+    });
+
     function renderFromAiData(aiData, baseHtml) {
       let htmlOut = baseHtml;
       const missing = new Set();
