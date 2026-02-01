@@ -1017,6 +1017,7 @@ module.exports = async (req, res) => {
     const aiFallbacks = {}; 
     const aiTypes = {}; 
     const aiLabels = {};
+    const pidByCanonical = {};
     let sectionCounter = 0;
 
     // CRITICAL FIX: Expand short JDs before building sections
@@ -1113,6 +1114,35 @@ VARIATION_SEED: ${seed}
       jdWasInferred,
       jdNormalized,
     });
+
+    function coerceAiDataToPids(aiData, pidMap) {
+      if (!aiData || typeof aiData !== 'object') return null;
+      const out = Object.assign({}, aiData);
+      const keyMap = {
+        summary: ['summary', 'intro', 'objective'],
+        'technical skills': ['technicalSkills', 'skills', 'hardSkills'],
+        'work experience': ['work', 'workExperience', 'experience', 'jobs'],
+        projects: ['projects', 'project'],
+        education: ['education', 'academics'],
+        certifications: ['certifications', 'certs'],
+        achievements: ['achievements', 'awards'],
+        'character traits': ['characterTraits', 'traits', 'softSkills', 'softskills'],
+      };
+
+      for (const [canon, pid] of Object.entries(pidMap)) {
+        if (out[pid]) continue;
+        const aliases = keyMap[canon] || [];
+        for (const alt of aliases) {
+          if (out[alt] !== undefined) {
+            const v = out[alt];
+            if (Array.isArray(v)) out[pid] = v.join(' | ');
+            else out[pid] = String(v);
+            break;
+          }
+        }
+      }
+      return out;
+    }
 
     // Build intelligentPrompt (single definition) used for all AI attempts
     const intelligentPrompt = `
@@ -1332,6 +1362,7 @@ OUTPUT: JSON only. No markdown.
         aiPrompts['sec_1'] = `Write a compelling summary for an entry-level candidate targeting ${finalJD}. Focus on key skills and enthusiasm.`;
         aiTypes['sec_1'] = 'summary';
         aiLabels['sec_1'] = 'Summary';
+        pidByCanonical['summary'] = 'sec_1';
         sectionCounter++;
         continue;
       }
@@ -1339,6 +1370,7 @@ OUTPUT: JSON only. No markdown.
       // --- WORK EXPERIENCE ---
       if (label === 'Work Experience') {
         const pid = `sec_${sectionCounter++}`;
+        pidByCanonical['work experience'] = pid;
         aiPrompts[pid] = `List relevant work experiences for a candidate with skills in ${rolePreset.skills.join(', ')}. Focus on achievements and impact.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Work Experience';
@@ -1348,6 +1380,7 @@ OUTPUT: JSON only. No markdown.
       // --- EDUCATION ---
       if (label === 'Education') {
         const pid = `sec_${sectionCounter++}`;
+        pidByCanonical['education'] = pid;
         aiPrompts[pid] = `Detail the educational background, including degrees, majors, and institutions. Emphasize relevant coursework or honors.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Education';
@@ -1357,6 +1390,8 @@ OUTPUT: JSON only. No markdown.
       // --- TECHNICAL SKILLS ---
       if (label === 'Technical Skills') {
         const pid = `sec_${sectionCounter++}`;
+        pidByCanonical['technical skills'] = pid;
+        pidByCanonical['skills'] = pid;
         aiPrompts[pid] = `List technical skills relevant to ${finalJD}. Include programming languages, tools, and technologies.`;
         aiTypes[pid] = 'chips';
         aiLabels[pid] = 'Technical Skills';
@@ -1366,6 +1401,7 @@ OUTPUT: JSON only. No markdown.
       // --- CERTIFICATIONS ---
       if (label === 'Certifications') {
         const pid = `sec_${sectionCounter++}`;
+        pidByCanonical['certifications'] = pid;
         aiPrompts[pid] = `Mention any relevant certifications. Focus on those that enhance the candidate's qualifications for ${finalJD}.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Certifications';
@@ -1375,6 +1411,7 @@ OUTPUT: JSON only. No markdown.
       // --- PROJECTS ---
       if (label === 'Projects') {
         const pid = `sec_${sectionCounter++}`;
+        pidByCanonical['projects'] = pid;
         aiPrompts[pid] = `Describe key projects that demonstrate the candidate's skills in ${rolePreset.skills.join(', ')}. Highlight the candidate's role and the technologies used.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Projects';
@@ -1384,6 +1421,7 @@ OUTPUT: JSON only. No markdown.
       // --- ACHIEVEMENTS ---
       if (label === 'Achievements') {
         const pid = `sec_${sectionCounter++}`;
+        pidByCanonical['achievements'] = pid;
         aiPrompts[pid] = `List notable achievements that would impress employers for the role of ${finalJD}. Quantify results when possible.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Achievements';
@@ -1393,6 +1431,9 @@ OUTPUT: JSON only. No markdown.
       // --- CHARACTER TRAITS ---
       if (label === 'Character Traits') {
         const pid = `sec_${sectionCounter++}`;
+        pidByCanonical['character traits'] = pid;
+        pidByCanonical['traits'] = pid;
+        pidByCanonical['soft skills'] = pid;
         aiPrompts[pid] = `Describe the top 6 soft skills or character traits that best describe the candidate. Relate them to the job role where possible.`;
         aiTypes[pid] = 'chips';
         aiLabels[pid] = 'Character Traits';
@@ -1452,7 +1493,8 @@ OUTPUT: JSON only. No markdown.
       const runAiAttempt = async (seedBase36) => {
         const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seedBase36}`;
         const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
-        const parsed = tryParseJsonLoose(aiJsonText);
+        const parsedRaw = tryParseJsonLoose(aiJsonText);
+        const parsed = coerceAiDataToPids(parsedRaw, pidByCanonical);
         debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: !!parsed, sample: String(aiJsonText || '').slice(0, 160) });
         if (!parsed) throw new Error('Invalid AI response');
         let render = renderFromAiData(parsed, baseSkeleton);
