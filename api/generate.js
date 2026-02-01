@@ -1200,9 +1200,30 @@ VARIATION_SEED: ${seed}
           const parsed = tryParseJsonLoose(aiJsonText);
           debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: !!parsed, sample: String(aiJsonText || '').slice(0, 160) });
           if (!parsed) throw new Error('Invalid AI response');
-          const render = renderFromAiData(parsed, baseSkeleton);
+          let render = renderFromAiData(parsed, baseSkeleton);
+
           if (render.missing.size && (forceStrict || aiOnly)) {
-            throw new Error(`AI missing required sections: ${Array.from(render.missing).join(', ')}`);
+            // attempt repair for missing pids (no fallback)
+            const missingPids = Array.from(render.missing);
+            const repairSeeds = [makeSeed().toString(36), makeSeed().toString(36)];
+            for (const rs of repairSeeds) {
+              try {
+                const repairPrompt = buildRepairPrompt(missingPids, rs);
+                const repairText = await callGeminiFlash(repairPrompt, { temperature: 1.05, maxOutputTokens: 1800 });
+                const repairParsed = tryParseJsonLoose(repairText);
+                debug.attempts.push({ temperature: 1.05, parsed: !!repairParsed, repair: true, sample: String(repairText || '').slice(0, 160) });
+                if (repairParsed) {
+                  const merged = Object.assign({}, parsed, repairParsed);
+                  render = renderFromAiData(merged, baseSkeleton);
+                  if (!render.missing.size) {
+                    return { parsed: merged, render };
+                  }
+                }
+              } catch (repairErr) {
+                debug.attempts.push({ temperature: 1.05, parsed: false, repair: true, error: String(repairErr && repairErr.message ? repairErr.message : repairErr) });
+              }
+            }
+            throw new Error(`AI missing required sections after repair: ${Array.from(render.missing).join(', ')}`);
           }
           return { parsed, render };
         };
