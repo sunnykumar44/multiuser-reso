@@ -1614,7 +1614,18 @@ OUTPUT: JSON only. No markdown.
     return res.status(200).json({ ok: true, generated: { html: htmlSkeleton }, debug });
 
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      ok: false,
+      error: String(err && err.message ? err.message : err),
+      stack: err && err.stack ? String(err.stack) : undefined,
+      debug: {
+        requestSeed,
+        aiEnabled: !!GEMINI_API_KEY,
+        aiOnly,
+        noFallback,
+        forceStrict,
+      }
+    });
   }
 };
 
