@@ -1407,35 +1407,13 @@ OUTPUT: JSON only. No markdown.
 
     // If, for any reason, no aiPrompts were defined, abort cleanly with a clear error
     if (!Object.keys(aiPrompts).length) {
-      const debug = Object.assign({}, debugBase, {
-        attempts: [],
-        usedFallbackFor: [],
-        invalidAI: {},
-        fallbackNote: '',
-        retryAfterSeconds: 0,
-        finalJD,
-        daily: remainingInfo,
-        jdWasInferred,
-        jdNormalized,
-      });
+      const debugNoPrompts = Object.assign({}, debug, { attempts: [], usedFallbackFor: [], invalidAI: {}, retryAfterSeconds: 0 });
       return res.status(400).json({
         ok: false,
         error: 'No AI sections were requested (empty scope / no prompts). At least one section such as Summary must be enabled.',
-        debug
+        debug: debugNoPrompts
       });
     }
-
-    const debug = Object.assign({}, debugBase, {
-      attempts: [],
-      usedFallbackFor: [],
-      invalidAI: {},
-      fallbackNote: '',
-      retryAfterSeconds: 0,
-      finalJD,
-      daily: remainingInfo,
-      jdWasInferred,
-      jdNormalized,
-    });
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && hasKey) {
       const cachedHtml = cachingEnabled && freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
