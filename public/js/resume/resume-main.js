@@ -1396,23 +1396,3 @@ if (btnGen) {
 })();
 
 //# sourceMappingURL=resume-main.js.map
-        if (!explicitHtml) {
-          const mod = await import('./resume-render.js');
-          mod.renderPaper({
-            paperEl: paper,
-            profile,
-            jd: d?.jd || $('jd')?.value || '',
-            mode: d?.mode || getActive('modes', 'data-mode') || 'ats',
-            template: d?.template || getActive('templates', 'data-template') || 'classic',
-            scope: d?.scope || (typeof getScopeFromUI === 'function' ? getScopeFromUI() : []),
-            htmlOverride: '',
-          });
-          enableInlineEditing(paper);
-        }
-      } catch (e) {
-        console.warn('post-generate profile rerender failed', e);
-      }
-    }, 0);
-  }, true);
-})();
-//# sourceMappingURL=resume-main.js.map
