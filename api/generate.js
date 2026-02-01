@@ -1255,10 +1255,87 @@ VARIATION_SEED: ${seed}
       return { html: htmlOut, missing };
     }
 
+    sectionsToRender.sort((a, b) => {
+        const ia = priority.indexOf(a.canonical);
+        const ib = priority.indexOf(b.canonical);
+        if (ia !== -1 && ib !== -1) return ia - ib;
+        if (ia !== -1) return -1;
+        if (ib !== -1) return 1;
+        return 0;
+    });
+
+    // HARD GUARANTEE: always have at least Summary in scope so aiPrompts is non-empty.
+    if (!sectionsToRender.length) {
+      sectionsToRender.push({ original: 'Summary', canonical: 'Summary' });
+    }
+
+    // Build AI prompts for each requested section
+    for (const secObj of sectionsToRender) {
+      const label = secObj.canonical;
+
+      // --- SUMMARY ---
+      if (label === 'Summary') {
+        aiPrompts['sec_1'] = `Write a compelling summary for an entry-level candidate targeting ${finalJD}. Focus on key skills and enthusiasm.`;
+        sectionCounter++;
+        continue;
+      }
+
+      // --- WORK EXPERIENCE ---
+      if (label === 'Work Experience') {
+        aiPrompts[`sec_${sectionCounter++}`] = `List relevant work experiences for a candidate with skills in ${rolePreset.skills.join(', ')}. Focus on achievements and impact.`;
+        continue;
+      }
+
+      // --- EDUCATION ---
+      if (label === 'Education') {
+        aiPrompts[`sec_${sectionCounter++}`] = `Detail the educational background, including degrees, majors, and institutions. Emphasize relevant coursework or honors.`;
+        continue;
+      }
+
+      // --- TECHNICAL SKILLS ---
+      if (label === 'Technical Skills') {
+        aiPrompts[`sec_${sectionCounter++}`] = `List technical skills relevant to ${finalJD}. Include programming languages, tools, and technologies.`;
+        continue;
+      }
+
+      // --- CERTIFICATIONS ---
+      if (label === 'Certifications') {
+        aiPrompts[`sec_${sectionCounter++}`] = `Mention any relevant certifications. Focus on those that enhance the candidate's qualifications for ${finalJD}.`;
+        continue;
+      }
+
+      // --- PROJECTS ---
+      if (label === 'Projects') {
+        aiPrompts[`sec_${sectionCounter++}`] = `Describe key projects that demonstrate the candidate's skills in ${rolePreset.skills.join(', ')}. Highlight the candidate's role and the technologies used.`;
+        continue;
+      }
+
+      // --- ACHIEVEMENTS ---
+      if (label === 'Achievements') {
+        aiPrompts[`sec_${sectionCounter++}`] = `List notable achievements that would impress employers for the role of ${finalJD}. Quantify results when possible.`;
+        continue;
+      }
+
+      // --- CHARACTER TRAITS ---
+      if (label === 'Character Traits') {
+        aiPrompts[`sec_${sectionCounter++}`] = `Describe the top 6 soft skills or character traits that best describe the candidate. Relate them to the job role where possible.`;
+        continue;
+      }
+    }
+
     const freeTierCacheKey = finalJD ? buildFreeCacheKey(profile, finalJD) : null;
     const cachingEnabled = useCache && !forceFresh;
     let cacheKeyToStore = null;
     let shouldCacheResult = false;
+
+    // If, for any reason, no aiPrompts were defined, abort cleanly with a clear error
+    if (!Object.keys(aiPrompts).length) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No AI sections were requested (empty scope / no prompts). At least one section such as Summary must be enabled.',
+        debug
+      });
+    }
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
       const cachedHtml = cachingEnabled && freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
