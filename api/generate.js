@@ -960,11 +960,23 @@ module.exports = async (req, res) => {
     const requestSeed = makeSeed();
     const rand = mulberry32(requestSeed);
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
-    const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false, forceFresh = false, useCache = true, forceStrict = false } = body;
+    let { profile: rawProfile, jd, nickname, scope = [], aiOnly = false, forceFresh = false, useCache = true, forceStrict = false } = body;
 
     // STRICT: default noFallback should be TRUE if you want AI-only by design.
     // (keeps backward compatibility if someone explicitly passes noFallback=false)
-    const noFallback = (typeof body.noFallback === 'boolean') ? body.noFallback : true;
+    let noFallback = (typeof body.noFallback === 'boolean') ? body.noFallback : true;
+
+    // If API key and JD exist, harden to AI-only on the server side as well
+    // so a misconfigured client cannot accidentally run fallback logic.
+    const hasKey = !!GEMINI_API_KEY;
+    if (hasKey) {
+      aiOnly = true;
+      noFallback = true;
+      forceStrict = true;
+    }
+
+    // Attach flags into debug early so you can see what server actually used
+    const debugBase = { requestSeed, aiEnabled: hasKey, aiOnly, noFallback, forceStrict };
 
     // FIX: define profile before first use
     const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
@@ -1074,7 +1086,7 @@ module.exports = async (req, res) => {
     </div>`;
 
     // 3. CALL AI (finalJD already declared above)
-    const debug = { attempts: [], usedFallbackFor: [], invalidAI: {}, fallbackNote: '', retryAfterSeconds: 0, finalJD, aiEnabled: !!GEMINI_API_KEY, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized };
+    const debug = { attempts: [], usedFallbackFor: [], invalidAI: {}, fallbackNote: '', retryAfterSeconds: 0, finalJD, aiEnabled: hasKey, aiOnly, requestSeed, daily: remainingInfo, jdWasInferred, jdNormalized, noFallback, forceStrict };
 
     // Build intelligentPrompt (required for AI path)
     const intelligentPrompt = `
@@ -1337,7 +1349,7 @@ VARIATION_SEED: ${seed}
       });
     }
 
-    if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
+    if (Object.keys(aiPrompts).length > 0 && finalJD && hasKey) {
       const cachedHtml = cachingEnabled && freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
       if (cachedHtml) {
         debug.cacheHit = true;
@@ -1477,13 +1489,14 @@ OUTPUT: JSON only. No markdown.
         }
       }
     } else {
-      // AI not executed (missing key/runtime)
-      if (aiOnly || noFallback) {
-        const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
-        return res.status(503).json({ ok: false, error: reason, debug });
-      }
-
-      // ...existing code (fallback path only if allowed)...
+      // AI cannot be executed because either:
+      // - GEMINI_API_KEY is missing, or
+      // - finalJD is empty (should not happen with a real JD)
+      const reason = !hasKey
+        ? 'Gemini API key not configured or not available in runtime'
+        : 'Missing finalJD; cannot build AI prompt';
+      debug.cannotExecuteReason = reason;
+      return res.status(503).json({ ok: false, error: reason, debug });
     }
 
     // If any section fell back, attach a short note explaining why this can happen
