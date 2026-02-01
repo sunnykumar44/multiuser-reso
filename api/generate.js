@@ -1114,6 +1114,36 @@ VARIATION_SEED: ${seed}
       jdNormalized,
     });
 
+    // Build intelligentPrompt (single definition) used for all AI attempts
+    const intelligentPrompt = `
+You are an EXPERT RESUME INTELLIGENCE ENGINE.
+
+PRIMARY OBJECTIVE: Generate a complete, ATS-friendly resume where ALL sections are connected and role-aligned.
+
+JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1200)}"
+USER PROFILE (may be partial): ${JSON.stringify(profile).slice(0, 1500)}
+
+STRICT VARIATION REQUIREMENTS:
+- Every generation MUST be meaningfully different in wording and examples.
+- Use VARIATION_SEED to pick different examples, metrics, and ordering.
+- Do NOT repeat the same certification twice.
+- Do NOT duplicate the same skill token.
+- Projects must be different from each other (different problem + dataset + technique).
+- Achievements must be different from each other and include measurable numbers.
+- Character Traits: return 6 distinct soft skills.
+
+RULES:
+1) SUMMARY IS MANDATORY.
+2) Infer role-appropriate technical skills; do not copy JD verbatim.
+3) Skills must be used in Projects; Projects support Experience; Certs match Skills; Achievements come from Projects/Experience.
+4) Return VALID JSON ONLY with these keys: ${Object.keys(aiPrompts).join(', ')}
+
+SECTION INSTRUCTIONS:
+${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v} || VARIATION_NONCE:${requestSeed}:${k}`).join('\n')}
+
+OUTPUT: JSON only. No markdown.
+`;
+
     function renderFromAiData(aiData, baseHtml) {
       let htmlOut = baseHtml;
       const missing = new Set();
