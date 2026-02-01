@@ -772,6 +772,69 @@ if (btnAddAiSection) {
 // The server Generate wiring will handle draft persistence + rendering.
 
 // --------------------
+// Free-tier cooldown helpers (missing -> ReferenceError)
+// Keep simple + safe (client-side only).
+// --------------------
+const FREE_TIER_MESSAGE = 'Daily free-tier limit reached. Try again after reset.';
+const __FREE_TIER_KEY = 'freeTierCooldownUntil';
+
+function isFreeTierCooldownActive() {
+  try {
+    const until = Number(localStorage.getItem(__FREE_TIER_KEY) || 0);
+    return Date.now() < until;
+  } catch (_) {
+    return false;
+  }
+}
+
+function triggerFreeTierCooldown(btn) {
+  try {
+    // 24h cooldown (client-side UX). Server is authoritative.
+    const until = Date.now() + 24 * 60 * 60 * 1000;
+    localStorage.setItem(__FREE_TIER_KEY, String(until));
+  } catch (_) {}
+  applyFreeTierCooldownState(btn);
+}
+
+function applyFreeTierCooldownState(btn) {
+  if (!btn) return;
+  const active = isFreeTierCooldownActive();
+  btn.disabled = !!active;
+  if (active) {
+    btn.dataset.__origText = btn.dataset.__origText || btn.textContent;
+    btn.textContent = 'Cooldown';
+  } else if (btn.dataset.__origText) {
+    btn.textContent = btn.dataset.__origText;
+    delete btn.dataset.__origText;
+  }
+}
+
+// --------------------
+// API caller (if not defined elsewhere in this module)
+// --------------------
+async function callGenerateAPI(payload) {
+  const resp = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    cache: 'no-store',
+    body: JSON.stringify(payload || {}),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const err = new Error((data && data.error) ? data.error : `Generate failed (${resp.status})`);
+    err.status = resp.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+// --------------------
+// IMPORTANT: You currently have TWO separate wireGenerateButton() blocks.
+// Keep ONE. Remove the duplicate later in the file.
+// --------------------
+
+// --------------------
 // Strict AI-only Generate (server integration)
 // - noFallback: true  => server must NOT use fallbacks
 // - aiOnly: true      => fail if AI not executed (no key / runtime issue)

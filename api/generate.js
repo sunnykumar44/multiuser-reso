@@ -818,6 +818,100 @@ function canonicalSectionName(name) {
   return String(name || '').trim().replace(/\s+/g, ' ').replace(/(^|\s)\S/g, l => l.toUpperCase());
 };
 
+// --------------------
+// Missing helpers (required by renderFromAiData strict path)
+// --------------------
+function rotateBySeed(arr, rand = Math.random) {
+  const a = Array.isArray(arr) ? arr.slice() : [];
+  if (a.length <= 1) return a;
+  const k = Math.floor(rand() * a.length);
+  return a.slice(k).concat(a.slice(0, k));
+}
+
+function enforceTwoDistinct(parts, fallbackPool = []) {
+  const cleaned = (parts || []).map(s => String(s || '').trim()).filter(Boolean);
+  const out = [];
+  const seen = new Set();
+
+  for (const s of cleaned) {
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+    if (out.length >= 2) break;
+  }
+
+  // fill from fallback pool if needed
+  for (const f of (fallbackPool || [])) {
+    if (out.length >= 2) break;
+    const s = String(f || '').trim();
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+
+  // last-resort padding
+  while (out.length < 2) out.push('PCEP – Certified Entry-Level Python Programmer');
+  return out.slice(0, 2);
+}
+
+function enforceNDistinct(parts, n = 6, fallbackPool = []) {
+  const cleaned = (parts || []).map(s => String(s || '').trim()).filter(Boolean);
+  const out = [];
+  const seen = new Set();
+
+  for (const s of cleaned) {
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+    if (out.length >= n) return out.slice(0, n);
+  }
+
+  for (const f of (fallbackPool || [])) {
+    if (out.length >= n) break;
+    const s = String(f || '').trim();
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+
+  while (out.length < n) out.push('Collaboration');
+  return out.slice(0, n);
+}
+
+function parseProjectsToLis(val, rolePreset, rand = Math.random) {
+  // Expected format: "<b>Title:</b> desc | <b>Title:</b> desc"
+  // Make it resilient: split on pipes/newlines; ensure two <li>.
+  const raw = String(val || '').replace(/\n+/g, ' ').trim();
+  const parts = raw
+    .split('|')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+
+  const items = [];
+  for (const p of parts) {
+    // keep HTML bold tags if present; otherwise escape only minimal
+    const txt = p.includes('<b>') ? p : escapeHtml(p);
+    items.push(`<li>${augmentProjectIfNeeded(txt, rolePreset, rand)}</li>`);
+    if (items.length >= 2) break;
+  }
+
+  // guarantee 2 projects in strict mode
+  while (items.length < 2) {
+    const fb = randomFromSeeded((rolePreset?.projects || []), rand) || '<b>Project:</b> Built a role-aligned solution with measurable impact.';
+    items.push(`<li>${fb}</li>`);
+  }
+
+  return items.join('');
+}
+
+// --------------------
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -1346,7 +1440,47 @@ VARIATION_SEED: ${seed}
           });
         }
 
-        // ...existing code (only reached if fallback is allowed)...
+        // Fallback to basic template with minimal AI
+        const fallbackSeed = makeSeed();
+        const fallbackRand = mulberry32(fallbackSeed);
+        const fallbackParts = Object.keys(aiPrompts);
+        const fallbackPrompt = `
+You are an EXPERT RESUME INTELLIGENCE ENGINE.
+
+PRIMARY OBJECTIVE: Generate a complete, ATS-friendly resume where ALL sections are connected and role-aligned.
+
+JOB ROLE/DESCRIPTION: "${finalJD.slice(0, 1200)}"
+USER PROFILE (may be partial): ${JSON.stringify(profile).slice(0, 1500)}
+
+STRICT VARIATION REQUIREMENTS:
+- Every generation MUST be meaningfully different in wording and examples.
+- Use VARIATION_SEED to pick different examples, metrics, and ordering.
+- Do NOT repeat the same certification twice.
+- Do NOT duplicate the same skill token.
+- Projects must be different from each other (different problem + dataset + technique).
+- Achievements must be different from each other and include measurable numbers.
+- Character Traits: return 6 distinct soft skills.
+
+RULES:
+1) SUMMARY IS MANDATORY.
+2) Infer role-appropriate technical skills; do not copy JD verbatim.
+3) Skills must be used in Projects; Projects support Experience; Certs match Skills; Achievements come from Projects/Experience.
+4) Return VALID JSON ONLY with these keys: ${Object.keys(aiPrompts).join(', ')}
+
+SECTION INSTRUCTIONS:
+${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v} || VARIATION_NONCE:${fallbackSeed}:${k}`).join('\n')}
+
+OUTPUT: JSON only. No markdown.
+`;
+        const fallbackRun = await callGeminiFlash(fallbackPrompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
+        const fallbackParsed = tryParseJsonLoose(fallbackRun);
+        debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: !!fallbackParsed, sample: String(fallbackRun || '').slice(0, 160) });
+
+        if (fallbackParsed) {
+          htmlSkeleton = renderFromAiData(fallbackParsed, baseSkeleton).html;
+        } else {
+          throw new Error('Fallback AI response invalid');
+        }
       }
     } else {
       // AI not executed (missing key/runtime)
