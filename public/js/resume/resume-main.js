@@ -909,6 +909,7 @@ function triggerFreeTierCooldown(btn) {
     try {
       e.preventDefault();
 
+      // FIX: $ helper expects id without '#'
       const jdNow = $('jd')?.value || '';
       if (!jdNow.trim()) {
         setStatus('Paste a job description first.', 'err');
@@ -1320,7 +1321,7 @@ function ensureAiScopeChecklistUI() {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = true;
-    cb.dataset.scope = label;
+    cb.value = label; // <-- critical: getScopeFromUI reads this
     cb.style.width = '16px';
     cb.style.height = '16px';
 
