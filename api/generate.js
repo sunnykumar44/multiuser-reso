@@ -2,6 +2,7 @@ const { saveHistory } = require("./firebase");
 const crypto = require('crypto');
 
 // Hard-lock to the free-tier-safe model; ignore env overrides to prevent accidental pro usage.
+// NOTE: Changing this model requires a deliberate code change (not an env var) to avoid quota burn.
 const GEMINI_FREE_MODEL = 'models/gemini-1.5-flash';
 const GEMINI_FREE_TEMPERATURE = 0.95;
 const FREE_CACHE_MAX_ENTRIES = Number(process.env.FREE_CACHE_MAX_ENTRIES) || 500;
