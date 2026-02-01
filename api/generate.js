@@ -617,12 +617,13 @@ function augmentAchievements(parts, rolePreset) {
 async function callGeminiFlash(promptText, opts = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
 
+  // Prefer v1; v1beta frequently deprecates model endpoints sooner
   const bases = [
     `https://generativelanguage.googleapis.com/v1`,
     `https://generativelanguage.googleapis.com/v1beta`
   ];
+
   const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  const candidates = GEMINI_FREE_MODELS;
   const temperature = (typeof opts.temperature === 'number') ? opts.temperature : GEMINI_FREE_TEMPERATURE;
   const maxOutputTokens = opts.maxOutputTokens || 2600;
 
@@ -636,30 +637,92 @@ async function callGeminiFlash(promptText, opts = {}) {
     }
   };
 
-  let lastErr = null;
-  for (const modelName of candidates) {
+  const looksLikeNotFound = (txt) =>
+    /NOT_FOUND|not found for api version|is not supported for generateContent/i.test(String(txt || ''));
+
+  async function tryGenerateWithModel(base, modelName) {
     const name = modelName.startsWith('models/') ? modelName : `models/${modelName}`;
+    const url = `${base}/${name}:generateContent?${keyQs}`;
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      const err = new Error(`Gemini API failed ${resp.status}: ${txt}`);
+      err.status = resp.status;
+      err.bodyText = txt;
+      err.isNotFound = resp.status === 404 || looksLikeNotFound(txt);
+      throw err;
+    }
+
+    const j = await resp.json();
+    const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!candidate) {
+      const err = new Error('No response from AI');
+      err.status = 502;
+      err.bodyText = JSON.stringify(j || {}).slice(0, 400);
+      throw err;
+    }
+
+    return candidate;
+  }
+
+  async function listModels(base) {
+    const url = `${base}/models?${keyQs}`;
+    const resp = await fetch(url, { method: 'GET' });
+    if (!resp.ok) return [];
+    const j = await resp.json().catch(() => null);
+
+    const models = Array.isArray(j?.models) ? j.models : [];
+
+    // Filter to ones that support generateContent (method name differs by API version, handle both)
+    const usable = models
+      .map(m => ({
+        name: String(m?.name || ''),
+        methods: Array.isArray(m?.supportedGenerationMethods) ? m.supportedGenerationMethods : [],
+      }))
+      .filter(m => m.name && (m.methods.includes('generateContent') || m.methods.includes('generateText')));
+
+    return usable.map(m => m.name);
+  }
+
+  // 1) Try the configured/known model list first
+  let lastErr = null;
+  let sawNotFound = false;
+
+  for (const modelName of GEMINI_FREE_MODELS) {
     for (const base of bases) {
-      const url = `${base}/${name}:generateContent?${keyQs}`;
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => '');
-        lastErr = new Error(`Gemini API failed ${resp.status}: ${txt}`);
-        continue;
+      try {
+        return await tryGenerateWithModel(base, modelName);
+      } catch (e) {
+        lastErr = e;
+        if (e && e.isNotFound) sawNotFound = true;
+        // continue trying other combos
       }
+    }
+  }
 
-      const j = await resp.json();
-      const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!candidate) {
-        lastErr = new Error('No response from AI');
-        continue;
+  // 2) If everything failed due to NOT_FOUND, discover a valid model and retry once
+  if (sawNotFound) {
+    for (const base of bases) {
+      try {
+        const discovered = await listModels(base);
+        // Prefer flash-ish models to control cost/latency; fallback to first usable.
+        const preferred =
+          discovered.find(n => /flash/i.test(n) && /gemini/i.test(n)) ||
+          discovered.find(n => /gemini/i.test(n)) ||
+          discovered[0];
+
+        if (preferred) {
+          return await tryGenerateWithModel(base, preferred);
+        }
+      } catch (e) {
+        lastErr = e;
       }
-      return candidate;
     }
   }
 
@@ -1265,6 +1328,7 @@ VARIATION_SEED: ${seed}
           lastErr = err;
           debug.lastError = String(err && err.message ? err.message : err);
           if (!forceStrict) break; // in non-strict mode we will fall back below
+       
         }
       }
 
