@@ -1183,6 +1183,21 @@ OUTPUT: JSON only. No markdown.
         const type = aiTypes[pid];
         const label = aiLabels[pid] || '';
 
+        // Coerce common structures (arrays/objects) into strings for strict parsing
+        if (Array.isArray(val)) {
+          val = val.map(v => (typeof v === 'string' ? v : JSON.stringify(v))).join(' | ');
+        } else if (val && typeof val === 'object') {
+          // If object has "items" or similar, flatten values
+          const possible = ['items', 'value', 'text'];
+          for (const k of possible) {
+            if (Array.isArray(val[k])) { val = val[k].join(' | '); break; }
+            if (typeof val[k] === 'string') { val = val[k]; break; }
+          }
+          if (typeof val === 'object') {
+            try { val = JSON.stringify(val); } catch (_) { val = String(val); }
+          }
+        }
+
         if (!val || typeof val !== 'string' || val.trim().length < 2) {
           let reason = 'unknown';
           if (val === undefined || val === null) reason = 'missing';
