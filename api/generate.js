@@ -749,8 +749,10 @@ module.exports = async (req, res) => {
     const rand = mulberry32(requestSeed);
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
     const { profile: rawProfile, jd, nickname, scope = [], aiOnly = false, forceFresh = false, useCache = true, forceStrict = false } = body;
+
+    // STRICT: default noFallback should be TRUE if you want AI-only by design.
+    // (keeps backward compatibility if someone explicitly passes noFallback=false)
     const noFallback = (typeof body.noFallback === 'boolean') ? body.noFallback : true;
-    const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
 
     // Normalize and dedupe incoming skills ("Python pre-processing" but on the server)
     if (profile && Array.isArray(profile.skills)) {
@@ -1161,120 +1163,113 @@ VARIATION_SEED: ${seed}
     let shouldCacheResult = false;
 
     if (Object.keys(aiPrompts).length > 0 && finalJD && GEMINI_API_KEY) {
-        const cachedHtml = cachingEnabled && freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
-        if (cachedHtml) {
-          debug.cacheHit = true;
-          return res.status(200).json({
-            ok: true,
-            generated: { html: cachedHtml },
-            cached: true,
-            debug
-          });
-        }
+      const cachedHtml = cachingEnabled && freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
+      if (cachedHtml) {
+        debug.cacheHit = true;
+        return res.status(200).json({
+          ok: true,
+          generated: { html: cachedHtml },
+          cached: true,
+          debug
+        });
+      }
 
-        // Enforce local daily limit only when AI is requested
-        const ticket = consumeOne(userKey);
-        debug.daily = ticket;
-        if (!ticket.ok) {
-          return res.status(429).json({
-            ok: false,
-            error: `Daily limit reached (${ticket.limit}/day). Try again after UTC reset.`,
-            debug
-          });
-        }
+      // Enforce local daily limit only when AI is requested
+      const ticket = consumeOne(userKey);
+      debug.daily = ticket;
+      if (!ticket.ok) {
+        return res.status(429).json({
+          ok: false,
+          error: `Daily limit reached (${ticket.limit}/day). Try again after UTC reset.`,
+          debug
+        });
+      }
 
-        // Allow refunding daily ticket if Gemini quota blocks the request (429)
-        const refundDailyTicket = () => {
-          try {
-            const state = globalThis.__DAILY_LIMIT_STATE__;
-            if (!state || !state.byUser) return;
-            const used = Number(state.byUser.get(userKey) || 0);
-            if (used > 0) state.byUser.set(userKey, used - 1);
-          } catch (_) {}
-        };
+      // Allow refunding daily ticket if Gemini quota blocks the request (429)
+      const refundDailyTicket = () => {
+        try {
+          const state = globalThis.__DAILY_LIMIT_STATE__;
+          if (!state || !state.byUser) return;
+          const used = Number(state.byUser.get(userKey) || 0);
+          if (used > 0) state.byUser.set(userKey, used - 1);
+        } catch (_) {}
+      };
 
-        const baseSkeleton = htmlSkeleton;
-        const runAiAttempt = async (seedBase36) => {
-          const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seedBase36}`;
-          const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
-          const parsed = tryParseJsonLoose(aiJsonText);
-          debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: !!parsed, sample: String(aiJsonText || '').slice(0, 160) });
-          if (!parsed) throw new Error('Invalid AI response');
-          let render = renderFromAiData(parsed, baseSkeleton);
+      const baseSkeleton = htmlSkeleton;
+      const runAiAttempt = async (seedBase36) => {
+        const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seedBase36}`;
+        const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
+        const parsed = tryParseJsonLoose(aiJsonText);
+        debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: !!parsed, sample: String(aiJsonText || '').slice(0, 160) });
+        if (!parsed) throw new Error('Invalid AI response');
+        let render = renderFromAiData(parsed, baseSkeleton);
 
-          if (render.missing.size && (forceStrict || aiOnly)) {
-            // attempt repair for missing pids (no fallback)
-            const missingPids = Array.from(render.missing);
-            const repairSeeds = [makeSeed().toString(36), makeSeed().toString(36)];
-            for (const rs of repairSeeds) {
-              try {
-                const repairPrompt = buildRepairPrompt(missingPids, rs);
-                const repairText = await callGeminiFlash(repairPrompt, { temperature: 1.05, maxOutputTokens: 1800 });
-                const repairParsed = tryParseJsonLoose(repairText);
-                debug.attempts.push({ temperature: 1.05, parsed: !!repairParsed, repair: true, sample: String(repairText || '').slice(0, 160) });
-                if (repairParsed) {
-                  const merged = Object.assign({}, parsed, repairParsed);
-                  render = renderFromAiData(merged, baseSkeleton);
-                  if (!render.missing.size) {
-                    return { parsed: merged, render };
-                  }
+        if (render.missing.size && (forceStrict || aiOnly)) {
+          // attempt repair for missing pids (no fallback)
+          const missingPids = Array.from(render.missing);
+          const repairSeeds = [makeSeed().toString(36), makeSeed().toString(36)];
+          for (const rs of repairSeeds) {
+            try {
+              const repairPrompt = buildRepairPrompt(missingPids, rs);
+              const repairText = await callGeminiFlash(repairPrompt, { temperature: 1.05, maxOutputTokens: 1800 });
+              const repairParsed = tryParseJsonLoose(repairText);
+              debug.attempts.push({ temperature: 1.05, parsed: !!repairParsed, repair: true, sample: String(repairText || '').slice(0, 160) });
+              if (repairParsed) {
+                const merged = Object.assign({}, parsed, repairParsed);
+                render = renderFromAiData(merged, baseSkeleton);
+                if (!render.missing.size) {
+                  return { parsed: merged, render };
                 }
-              } catch (repairErr) {
-                debug.attempts.push({ temperature: 1.05, parsed: false, repair: true, error: String(repairErr && repairErr.message ? repairErr.message : repairErr) });
               }
+            } catch (repairErr) {
+              debug.attempts.push({ temperature: 1.05, parsed: false, repair: true, error: String(repairErr && repairErr.message ? repairErr.message : repairErr) });
             }
-            throw new Error(`AI missing required sections after repair: ${Array.from(render.missing).join(', ')}`);
           }
-          return { parsed, render };
-        };
+          throw new Error(`AI missing required sections after repair: ${Array.from(render.missing).join(', ')}`);
+        }
+        return { parsed, render };
+      };
 
-        let aiSuccess = null;
-        let lastErr = null;
-        const seeds = [requestSeed.toString(36), makeSeed().toString(36)];
+      let aiSuccess = null;
+      let lastErr = null;
+      const seeds = [requestSeed.toString(36), makeSeed().toString(36)];
 
-        for (const s of seeds) {
-          try {
-            aiSuccess = await runAiAttempt(s);
-            break;
-          } catch (err) {
-            lastErr = err;
-            debug.lastError = String(err && err.message ? err.message : err);
-            if (!forceStrict) break; // in non-strict mode we will fall back below
-          }
+      for (const s of seeds) {
+        try {
+          aiSuccess = await runAiAttempt(s);
+          break;
+        } catch (err) {
+          lastErr = err;
+          debug.lastError = String(err && err.message ? err.message : err);
+          if (!forceStrict) break; // in non-strict mode we will fall back below
+        }
+      }
+
+      if (aiSuccess) {
+        htmlSkeleton = aiSuccess.render.html;
+        cacheKeyToStore = cachingEnabled ? freeTierCacheKey : null;
+        shouldCacheResult = !!cacheKeyToStore;
+      } else {
+        // If strict AI-only, do not fall back. Return a hard error.
+        if (aiOnly || noFallback || forceStrict) {
+          return res.status(503).json({
+            ok: false,
+            error: 'AI response invalid; strict mode disallows fallback. Please retry.',
+            debug
+          });
         }
 
-        if (aiSuccess) {
-          htmlSkeleton = aiSuccess.render.html;
-          cacheKeyToStore = cachingEnabled ? freeTierCacheKey : null;
-          shouldCacheResult = !!cacheKeyToStore;
-        } else {
-          const msg = String(lastErr && lastErr.message ? lastErr.message : '').toLowerCase();
-          if (msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota')) {
-            refundDailyTicket();
-            const seconds = secondsUntilFreeTierReset();
-            debug.retryAfterSeconds = Math.max(debug.retryAfterSeconds, seconds);
-            return res.status(429).json({
-              ok: false,
-              error: 'Daily free-tier limit reached. Try again after 1:30 PM IST.',
-              retryAfterSeconds: seconds,
-              debug
-            });
-          }
-          if (forceStrict) {
-            refundDailyTicket();
-            return res.status(503).json({ ok: false, error: 'AI response invalid; please retry after cooldown', debug });
-          }
-          Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
-          htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
-        }
+        // ...existing code (only reached if fallback is allowed)...
+      }
     } else {
-         if (aiOnly || noFallback) {
-           const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
-            return res.status(503).json({ ok: false, error: reason, debug });
-          }
-          Object.keys(aiPrompts).forEach(pid => { htmlSkeleton = htmlSkeleton.replace(`[${pid}]`, aiFallbacks[pid]); debug.usedFallbackFor.push(pid); });
-          htmlSkeleton = applyGuaranteedVariationToFallback(htmlSkeleton, rolePreset, rand);
-     }
+      // AI not executed (missing key/runtime)
+      if (aiOnly || noFallback) {
+        const reason = !GEMINI_API_KEY ? 'Gemini API key not configured or not available in runtime' : 'AI not executed';
+        return res.status(503).json({ ok: false, error: reason, debug });
+      }
+
+      // ...existing code (fallback path only if allowed)...
+    }
 
     // If any section fell back, attach a short note explaining why this can happen
     if (Array.isArray(debug.usedFallbackFor) && debug.usedFallbackFor.length) {

@@ -772,123 +772,11 @@ if (btnAddAiSection) {
 // The server Generate wiring will handle draft persistence + rendering.
 
 // --------------------
-// Generate (server integration)
+// Strict AI-only Generate (server integration)
+// - noFallback: true  => server must NOT use fallbacks
+// - aiOnly: true      => fail if AI not executed (no key / runtime issue)
+// - forceStrict: true => fail if AI missing required sections
 // --------------------
-const btnGen = $("btnGen");
-if (btnGen) {
-  btnGen.addEventListener("click", () => {
-    const raw = sessionStorage.getItem("unlockedProfile");
-    if (!raw) {
-      setStatus("Locked. Unlock first.", "err");
-      return;
-    }
-
-    const profile = safeParseJSON(raw, null);
-    if (!profile) {
-      setStatus("Profile parse failed.", "err");
-      return;
-    }
-
-    const jdField = $("jd");
-    const jd = jdField ? jdField.value.trim() : "";
-    if (!jd) {
-      setStatus("Paste a job description first.", "err");
-      return;
-    }
-
-    const mode = getActive("modes", "data-mode") || "ats";
-    const template = getActive("templates", "data-template") || "classic";
-    const scope = getScopeFromUI();
-
-    // Save draft
-    draft.jd = jd;
-    draft.mode = mode;
-    draft.template = template;
-    draft.scope = scope;
-    draft.htmlOverride = ""; // new generation resets manual edits
-    saveDraft(draft);
-
-    renderWithDraft();
-    setStatus(`Generated (draft). AI scope: ${scope.join(", ") || "None"}`, "ok");
-  });
-}
-
-// Server generate integration: POST to /api/generate and return parsed JSON
-async function callGenerateAPI(payload) {
-  try {
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const text = await res.text().catch(() => '');
-    let json = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch (__) {
-      json = null;
-    }
-    if (!res.ok) {
-      const error = new Error(json?.error || `Generate API error: ${res.status}`);
-      error.status = res.status;
-      error.data = json;
-      error.rawText = text;
-      throw error;
-    }
-    if (!json) {
-      throw new Error('Empty server response');
-    }
-    return json;
-  } catch (err) {
-    console.error('callGenerateAPI error:', err);
-    throw err;
-  }
-}
-
-const FREE_TIER_COOLDOWN_KEY = 'geminiFreeTierCooldownUntil';
-const FREE_TIER_MESSAGE = 'Free daily limit reached. Try again after 1:30 PM IST.';
-
-function getNextFreeTierResetTimestamp() {
-  const now = new Date();
-  const reset = new Date(now);
-  reset.setUTCHours(8, 0, 0, 0); // 08:00 UTC (midnight Pacific)
-  if (reset.getTime() <= now.getTime()) {
-    reset.setUTCDate(reset.getUTCDate() + 1);
-  }
-  return reset.getTime();
-}
-
-function getStoredFreeTierCooldown() {
-  if (typeof localStorage === 'undefined') return 0;
-  const raw = localStorage.getItem(FREE_TIER_COOLDOWN_KEY);
-  const num = Number(raw);
-  return Number.isFinite(num) ? num : 0;
-}
-
-function isFreeTierCooldownActive() {
-  return getStoredFreeTierCooldown() > Date.now();
-}
-
-function applyFreeTierCooldownState(btn) {
-  const active = isFreeTierCooldownActive();
-  if (btn) {
-    btn.disabled = active;
-    btn.dataset.freeTierCooldown = active ? '1' : '0';
-  }
-}
-
-function triggerFreeTierCooldown(btn) {
-  if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(FREE_TIER_COOLDOWN_KEY, String(getNextFreeTierResetTimestamp()));
-  }
-  if (btn) {
-    btn.disabled = true;
-    btn.dataset.freeTierCooldown = '1';
-  }
-  return getStoredFreeTierCooldown();
-}
-
-// Wire the existing Generate button to call the server and render returned HTML
 (function wireGenerateButton() {
   const btn = $('btnGen');
   if (!btn) return;
@@ -909,7 +797,6 @@ function triggerFreeTierCooldown(btn) {
     try {
       e.preventDefault();
 
-      // FIX: $ helper expects id without '#'
       const jdNow = $('jd')?.value || '';
       if (!jdNow.trim()) {
         setStatus('Paste a job description first.', 'err');
@@ -918,7 +805,7 @@ function triggerFreeTierCooldown(btn) {
 
       const mode = getActive('modes', 'data-mode') || 'ats';
       const template = getActive('templates', 'data-template') || 'classic';
-      const scope = getScopeFromUI(); // normalized titles
+      const scope = getScopeFromUI();
 
       const rawNow = sessionStorage.getItem('unlockedProfile');
       if (!rawNow) {
@@ -936,7 +823,8 @@ function triggerFreeTierCooldown(btn) {
         (currentProfile && (currentProfile.nickname || currentProfile.fullName)) ||
         'anon';
 
-      setStatus('Generating via server...');
+      setStatus('Generating via AI (strict)...');
+
       const result = await callGenerateAPI({
         profile: currentProfile,
         jd: jdNow,
@@ -944,18 +832,25 @@ function triggerFreeTierCooldown(btn) {
         template,
         scope,
         nickname: effectiveNickname,
+
+        // STRICT: no fallback, AI only
+        aiOnly: true,
+        noFallback: true,
+        forceStrict: true,
+
+        // keep your current cache behavior
         forceFresh: true,
         useCache: false,
-        forceStrict: true,
       });
 
-      let serverHtml = null;
-      if (result?.generated?.html) serverHtml = result.generated.html;
-      else if (result?.html) serverHtml = result.html;
+      const serverHtml =
+        (result?.generated?.html) ? result.generated.html :
+        (result?.html) ? result.html :
+        null;
 
       if (!serverHtml) throw new Error('Server returned no usable HTML');
 
-      // Persist UI -> draft + store HTML override (this is the "generated resume")
+      // Persist AI HTML and render it (this guarantees the preview changes after generation)
       draft.jd = jdNow;
       draft.mode = mode;
       draft.template = template;
@@ -963,7 +858,6 @@ function triggerFreeTierCooldown(btn) {
       draft.htmlOverride = String(serverHtml || '');
       saveDraft(draft);
 
-      // Render returned HTML, allow editing
       if (paperEl) {
         paperEl.innerHTML = draft.htmlOverride;
         try { paperEl.contentEditable = true; } catch (_) {}
@@ -976,7 +870,7 @@ function triggerFreeTierCooldown(btn) {
       if (saveBtn) saveBtn.classList.remove('unsaved');
 
       updateEditBadge();
-      setStatus('Generated (server)', 'ok');
+      setStatus('Generated (AI)', 'ok');
       showToast('Generated', 'success', 1600);
     } catch (err) {
       console.error('Generate click error:', err);
@@ -988,8 +882,9 @@ function triggerFreeTierCooldown(btn) {
         return;
       }
 
-      setStatus('Generation failed', 'err');
-      showToast('Generation failed', 'err');
+      // Strict mode: show the server error and do NOT change preview
+      setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
+      showToast('Generation failed', 'warn');
     }
   });
 })();
@@ -1372,30 +1267,135 @@ try {
 // public/js/resume/resume-main.js
 // ...existing code...
 
-(async function patchGenerateFlowToPreferProfileRender() {
+// --------------------
+// Disable legacy draft-only Generate handler.
+// It prevents "everything changes after generation" because it re-renders from profile.
+// --------------------
+const btnGen = $("btnGen");
+if (btnGen) {
+  // DISABLED (AI-only flow uses the server wiring below)
+  // btnGen.addEventListener("click", () => { ... });
+}
+
+// --------------------
+// Strict AI-only Generate (server integration)
+// - noFallback: true  => server must NOT use fallbacks
+// - aiOnly: true      => fail if AI not executed (no key / runtime issue)
+// - forceStrict: true => fail if AI missing required sections
+// --------------------
+(function wireGenerateButton() {
   const btn = $('btnGen');
   if (!btn) return;
-  if (btn.__eduFixPatched) return;
-  btn.__eduFixPatched = true;
 
-  // If another handler already exists, we can't easily remove it without refs.
-  // Instead, after any click, force a re-render from latest profile unless the server returned explicit HTML.
-  btn.addEventListener('click', async () => {
-    // Give other click handlers time to run first.
-    setTimeout(async () => {
-      try {
-        const paper = document.getElementById('paper');
-        if (!paper) return;
+  if (btn.__serverGenWired) return;
+  btn.__serverGenWired = true;
 
-        const raw = sessionStorage.getItem('unlockedProfile');
-        const profile = safeParseJSON(raw, null);
-        if (!profile) return;
+  applyFreeTierCooldownState(btn);
+  setInterval(() => applyFreeTierCooldownState(btn), 60000);
 
-        // Reload draft (it may have been updated by Generate handler)
-        const d = loadDraft();
-        const explicitHtml = d && typeof d.htmlOverride === 'string' ? d.htmlOverride.trim() : '';
+  btn.addEventListener('click', async (e) => {
+    if (isFreeTierCooldownActive()) {
+      setStatus(FREE_TIER_MESSAGE, 'err');
+      showToast(FREE_TIER_MESSAGE, 'warn');
+      return;
+    }
 
-        // If htmlOverride exists, keep it. Otherwise render from profile so Education fields show.
+    try {
+      e.preventDefault();
+
+      const jdNow = $('jd')?.value || '';
+      if (!jdNow.trim()) {
+        setStatus('Paste a job description first.', 'err');
+        return;
+      }
+
+      const mode = getActive('modes', 'data-mode') || 'ats';
+      const template = getActive('templates', 'data-template') || 'classic';
+      const scope = getScopeFromUI();
+
+      const rawNow = sessionStorage.getItem('unlockedProfile');
+      if (!rawNow) {
+        setStatus('Locked. Unlock first.', 'err');
+        return;
+      }
+      const currentProfile = safeParseJSON(rawNow, null);
+      if (!currentProfile) {
+        setStatus('Profile parse failed.', 'err');
+        return;
+      }
+
+      const effectiveNickname =
+        sessionStorage.getItem('unlockedNickname') ||
+        (currentProfile && (currentProfile.nickname || currentProfile.fullName)) ||
+        'anon';
+
+      setStatus('Generating via AI (strict)...');
+
+      const result = await callGenerateAPI({
+        profile: currentProfile,
+        jd: jdNow,
+        mode,
+        template,
+        scope,
+        nickname: effectiveNickname,
+
+        // STRICT: no fallback, AI only
+        aiOnly: true,
+        noFallback: true,
+        forceStrict: true,
+
+        // keep your current cache behavior
+        forceFresh: true,
+        useCache: false,
+      });
+
+      const serverHtml =
+        (result?.generated?.html) ? result.generated.html :
+        (result?.html) ? result.html :
+        null;
+
+      if (!serverHtml) throw new Error('Server returned no usable HTML');
+
+      // Persist AI HTML and render it (this guarantees the preview changes after generation)
+      draft.jd = jdNow;
+      draft.mode = mode;
+      draft.template = template;
+      draft.scope = scope;
+      draft.htmlOverride = String(serverHtml || '');
+      saveDraft(draft);
+
+      if (paperEl) {
+        paperEl.innerHTML = draft.htmlOverride;
+        try { paperEl.contentEditable = true; } catch (_) {}
+        enableInlineEditing(paperEl);
+      }
+
+      pendingHtmlOverride = null;
+      lastSavedHtmlOverride = null;
+      const saveBtn = $('btnSaveEdits');
+      if (saveBtn) saveBtn.classList.remove('unsaved');
+
+      updateEditBadge();
+      setStatus('Generated (AI)', 'ok');
+      showToast('Generated', 'success', 1600);
+    } catch (err) {
+      console.error('Generate click error:', err);
+
+      if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
+        triggerFreeTierCooldown(btn);
+        setStatus(FREE_TIER_MESSAGE, 'err');
+        showToast(FREE_TIER_MESSAGE, 'warn');
+        return;
+      }
+
+      // Strict mode: show the server error and do NOT change preview
+      setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
+      showToast('Generation failed', 'warn');
+    }
+  });
+})();
+
+//# sourceMappingURL=resume-main.js.map
         if (!explicitHtml) {
           const mod = await import('./resume-render.js');
           mod.renderPaper({
