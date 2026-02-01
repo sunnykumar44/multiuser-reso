@@ -315,12 +315,12 @@ function stripRolePrefix(bullet, role) {
   const s = String(bullet || '').trim();
   const k = String(role || '').trim();
   if (!s || !k) return s;
-  const re = new RegExp('^' + escapeRegExp(k) + '\\s*(?:\\u2013|\\u2014|-|:)\\s*', 'i');
-  return s.replace(re, '').trim();
-}
-  if (!s || !k) return s;
+
   // Match: "<role> - ..." or "<role> – ..." or "<role>: ..." (hyphen types included)
-  const re = new RegExp('^' + escapeRegExp(k) + '\\s*(?:\\u2013|\\u2014|-|:)\\s*', 'i');
+  const re = new RegExp(
+    '^' + escapeRegExp(k) + '\\s*(?:\\u2013|\\u2014|-|:)\\s*',
+    'i'
+  );
   return s.replace(re, '').trim();
 }
 }
