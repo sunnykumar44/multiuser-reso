@@ -754,6 +754,9 @@ module.exports = async (req, res) => {
     // (keeps backward compatibility if someone explicitly passes noFallback=false)
     const noFallback = (typeof body.noFallback === 'boolean') ? body.noFallback : true;
 
+    // FIX: define profile before first use
+    const profile = (rawProfile && typeof rawProfile === 'object') ? rawProfile : {};
+
     // Normalize and dedupe incoming skills ("Python pre-processing" but on the server)
     if (profile && Array.isArray(profile.skills)) {
       profile.skills = dedupeSkillsLike(profile.skills);

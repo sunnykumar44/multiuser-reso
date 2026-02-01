@@ -889,7 +889,7 @@ if (btnAddAiSection) {
   });
 })();
 
-// Client-side fallback generator (mirrors server fallback) to keep UX working when API errors
+//# sourceMappingURL=resume-main.js.map
 function clientBuildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic', scope = [], nickname) {
   const displayName = (profile && profile.fullName) || nickname || 'User';
   const jdSnippet = String(jd || '').slice(0, 400);
