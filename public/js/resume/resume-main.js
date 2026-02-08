@@ -824,9 +824,63 @@ async function callGenerateAPI(payload) {
     const err = new Error((data && data.error) ? data.error : `Generate failed (${resp.status})`);
     err.status = resp.status;
     err.data = data;
+    // Allow downstream handlers to decide whether to render a client fallback
+    err.allowClientFallback = !!(data && data.allowClientFallback);
     throw err;
   }
   return data;
+}
+
+// Shared error handler so both generate click blocks behave the same way.
+function handleGenerateError(err, btn, currentProfile, jdNow, mode, template, scope, effectiveNickname) {
+  console.error('Generate click error:', err);
+
+  // Respect server-side daily limiter
+  if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
+    triggerFreeTierCooldown(btn);
+    setStatus(FREE_TIER_MESSAGE, 'err');
+    showToast(FREE_TIER_MESSAGE, 'warn');
+    return true;
+  }
+
+  // If server invites fallback or Gemini is unavailable, render client fallback
+  const shouldFallback =
+    err?.allowClientFallback ||
+    err?.status === 503 ||
+    err?.status === 500 ||
+    /invalid ai response/i.test(String(err && err.message));
+
+  if (shouldFallback) {
+    const html = clientBuildFallback(currentProfile || {}, jdNow, mode, template, scope, effectiveNickname);
+
+    draft.jd = jdNow;
+    draft.mode = mode;
+    draft.template = template;
+    draft.scope = scope;
+    draft.htmlOverride = String(html || '');
+    saveDraft(draft);
+
+    if (paperEl) {
+      paperEl.innerHTML = draft.htmlOverride;
+      try { paperEl.contentEditable = true; } catch (_) {}
+      enableInlineEditing(paperEl);
+    }
+
+    pendingHtmlOverride = null;
+    lastSavedHtmlOverride = null;
+    const saveBtn = $('btnSaveEdits');
+    if (saveBtn) saveBtn.classList.remove('unsaved');
+
+    updateEditBadge();
+    setStatus(String(err?.data?.error || err?.message || 'AI unavailable; using fallback resume.'), 'err');
+    showToast('Using fallback resume', 'warn', 2200);
+    return true;
+  }
+
+  // Otherwise surface the error
+  setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
+  showToast('Generation failed', 'warn');
+  return false;
 }
 
 // --------------------
@@ -967,32 +1021,12 @@ async function callGenerateAPI(payload) {
         setStatus('Generated (AI)', 'ok');
         showToast('Generated', 'success', 1600);
       } catch (err) {
-        console.error('Generate click error:', err);
-
-        if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
-          triggerFreeTierCooldown(btn);
-          setStatus(FREE_TIER_MESSAGE, 'err');
-          showToast(FREE_TIER_MESSAGE, 'warn');
-          return;
-        }
-
-        // Strict mode: show the server error and do NOT change preview
-        setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
-        showToast('Generation failed', 'warn');
+        const handled = handleGenerateError(err, btn, currentProfile, jdNow, mode, template, scope, effectiveNickname);
+        if (handled) return;
       }
     } catch (err) {
-      console.error('Generate click error:', err);
-
-      if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
-        triggerFreeTierCooldown(btn);
-        setStatus(FREE_TIER_MESSAGE, 'err');
-        showToast(FREE_TIER_MESSAGE, 'warn');
-        return;
-      }
-
-      // Strict mode: show the server error and do NOT change preview
-      setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
-      showToast('Generation failed', 'warn');
+      const handled = handleGenerateError(err, btn, currentProfile, jdNow, mode, template, scope, effectiveNickname);
+      if (handled) return;
     }
   });
 })();
@@ -1518,32 +1552,12 @@ if (btnGen) {
         setStatus('Generated (AI)', 'ok');
         showToast('Generated', 'success', 1600);
       } catch (err) {
-        console.error('Generate click error:', err);
-
-        if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
-          triggerFreeTierCooldown(btn);
-          setStatus(FREE_TIER_MESSAGE, 'err');
-          showToast(FREE_TIER_MESSAGE, 'warn');
-          return;
-        }
-
-        // Strict mode: show the server error and do NOT change preview
-        setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
-        showToast('Generation failed', 'warn');
+        const handled = handleGenerateError(err, btn, currentProfile, jdNow, mode, template, scope, effectiveNickname);
+        if (handled) return;
       }
     } catch (err) {
-      console.error('Generate click error:', err);
-
-      if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
-        triggerFreeTierCooldown(btn);
-        setStatus(FREE_TIER_MESSAGE, 'err');
-        showToast(FREE_TIER_MESSAGE, 'warn');
-        return;
-      }
-
-      // Strict mode: show the server error and do NOT change preview
-      setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
-      showToast('Generation failed', 'warn');
+      const handled = handleGenerateError(err, btn, currentProfile, jdNow, mode, template, scope, effectiveNickname);
+      if (handled) return;
     }
   });
 })();

@@ -1645,7 +1645,7 @@ OUTPUT: JSON only. No markdown.
         ? 'Gemini API key not configured or not available in runtime'
         : 'Missing finalJD; cannot build AI prompt';
       debug.cannotExecuteReason = reason;
-      return res.status(503).json({ ok: false, error: reason, debug });
+      return res.status(503).json({ ok: false, error: reason, debug, allowClientFallback: true });
     }
 
     // If any section fell back, attach a short note explaining why this can happen
@@ -1701,6 +1701,7 @@ OUTPUT: JSON only. No markdown.
       ok: false,
       error: String(err && err.message ? err.message : err),
       stack: err && err.stack ? String(err.stack) : undefined,
+      allowClientFallback: err && (err.code === 'AI_INVALID_JSON' || err.code === 'AI_FAILURE'),
       debug: {
         requestSeed,
         aiEnabled: !!GEMINI_API_KEY,
