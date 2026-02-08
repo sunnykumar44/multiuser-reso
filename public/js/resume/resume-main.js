@@ -1043,7 +1043,7 @@ function handleGenerateError(err, btn, currentProfile, jdNow, mode, template, sc
 
 //# sourceMappingURL=resume-main.js.map
 function clientBuildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic', scope = [], nickname) {
-  // local safe escaper (use global escapeHtml if present; otherwise provide a minimal fallback)
+  // local safe escaper (prefer global escapeHtml if present)
   const esc = (typeof escapeHtml === 'function') ? escapeHtml : (str = '') =>
     String(str)
       .replace(/&/g, '&amp;')
@@ -1055,51 +1055,51 @@ function clientBuildFallback(profile = {}, jd = '', mode = 'ats', template = 'cl
   const displayName = (profile && profile.fullName) || nickname || 'User';
   const jdSnippet = String(jd || '').slice(0, 400);
   const parts = [];
-  parts.push(`<div class="generated-resume"><h2>Generated resume for ${esc(displayName)}</h2><p>Mode: ${esc(mode)}, Template: ${esc(template)}</p>`);
-  const sections = (Array.isArray(scope) && scope.length) ? scope : ['Summary','Skills','Experience'];
+
+  parts.push(`<div class="generated-resume">`);
+  parts.push(`<h2>Generated resume for ${esc(displayName)}</h2>`);
+  parts.push(`<p>Mode: ${esc(mode)}, Template: ${esc(template)}</p>`);
+
+  const sections = (Array.isArray(scope) && scope.length) ? scope : ['Summary', 'Skills', 'Experience'];
+
   for (const sec of sections) {
     const key = String(sec || '').trim().toLowerCase();
-    if (key === 'summary') {
-      if
+
+    // SUMMARY
+    if (key === 'summary' || key === 'objective' || key === 'profile') {
+      if (profile.summary) {
+        parts.push(`<section><h3>Summary</h3><p>${esc(profile.summary)}</p></section>`);
+      }
+      continue;
+    }
+
+    // SKILLS / TECHNICAL SKILLS
+    if (key === 'skills' || key === 'technical skills') {
+      const skills = Array.isArray(profile.skills)
+        ? profile.skills
+        : (profile.skills ? String(profile.skills).split(/\r?\n|,/) : []);
+      if (skills && skills.length) {
+        parts.push('<section><h3>Skills</h3><ul>');
+        skills.forEach(s => {
+          const v = String(s || '').trim();
+          if (v) parts.push(`<li>${esc(v)}</li>`);
+        });
+        parts.push('</ul></section>');
+      }
+      continue;
+    }
+
+    // EDUCATION
+    if (key === 'education') {
+      const eds = Array.isArray(profile.education) ? profile.education : (Array.isArray(profile.educationEntries) ? profile.educationEntries : null);
+      if (eds && eds.length) {
+        parts.push('<section><h3>Education</h3>');
+        eds.forEach(ed => {
           const inst = ed.institution || ed.school || ed.college || '';
           const degree = ed.degree || ed.program || ed.branch || '';
           const year = ed.year || ed.graduationYear || ed.endYear || ((ed.startYear && ed.endYear) ? `${ed.startYear} - ${ed.endYear}` : '');
           parts.push('<div class="edu-item">');
-          if (inst) parts.push(`<strong>${escapeHtml(inst)}</strong>`);
-          if (degree) parts.push(`<div>${escapeHtml(degree)}</div>`);
-          if (year) parts.push(`<small>${escapeHtml(String(year))}</small>`);
-          parts.push('</div>');
-        });
-        parts.push('</section>');
-      } else if (profile.college) {
-        // legacy single college field + optional branch/year
-        parts.push('<section><h3>Education</h3>');
-        parts.push('<div class="edu-item">');
-        parts.push(`<strong>${escapeHtml(profile.college)}</strong>`);
-        const branch = profile.branch || profile.collegeBranch || profile.degree || '';
-        const year = profile.graduationYear || profile.year || '';
-        if (branch) parts.push(`<div>${escapeHtml(branch)}</div>`);
-        if (year) parts.push(`<small>${escapeHtml(String(year))}</small>`);
-        parts.push('</div>');
-        parts.push('</section>');
-      }
-    } else if (key.includes('experience') || key.includes('work') || key.includes('project')) {
-      const secs = Array.isArray(profile.customSections) ? profile.customSections.filter(s=>s && (String(s.type||'')==='entries')) : [];
-      if (secs.length) {
-        secs.forEach(sg=>{ parts.push(`<section><h3>${escapeHtml(sg.title||'Experience')}</h3>`); (sg.items||[]).forEach(it=>{ parts.push(`<div><strong>${escapeHtml(it.key||'')}</strong>`); if (Array.isArray(it.bullets)&&it.bullets.length){ parts.push('<ul>'); it.bullets.forEach(b=>parts.push(`<li>${escapeHtml(b)}</li>`)); parts.push('</ul>'); } parts.push('</div>'); }); parts.push('</section>'); });
-      }
-    } else {
-      // generic match
-      const match = (Array.isArray(profile.customSections)?profile.customSections:[]).find(sc=>String(sc.title||'').trim().toLowerCase()===key);
-      if (match) {
-        parts.push(`<section><h3>${escapeHtml(match.title)}</h3>`);
-        if (match.type==='entries') { (match.items||[]).forEach(it=>{ parts.push(`<div><strong>${escapeHtml(it.key||'')}</strong>`); if (Array.isArray(it.bullets)&&it.bullets.length){ parts.push('<ul>'); it.bullets.forEach(b=>parts.push(`<li>${escapeHtml(b)}</li>`)); parts.push('</ul>'); } parts.push('</div>'); }); }
-        else { parts.push('<ul>'); (match.items||[]).forEach(it=>parts.push(`<li>${escapeHtml(String(it||''))}</li>`)); parts.push('</ul>'); }
-        parts.push('</section>');
-      }
-    }
-  }
-  if (jdSnippet) parts.push(`<section><h3>Target role</h3><pre>${escapeHtml(jdSnippet)}</pre></section>`);
+          if
   parts.push('</div>');
   return parts.join('\n');
 }
