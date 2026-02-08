@@ -1485,7 +1485,7 @@ OUTPUT: JSON only. No markdown.
       const cachedHtml = cachingEnabled && freeTierCacheKey ? getCachedHtml(freeTierCacheKey) : null;
       if (cachedHtml) {
         debug.cacheHit = true;
-        return res.status(200).json({
+               return res.status(200).json({
           ok: true,
           generated: { html: cachedHtml },
           cached: true,
@@ -1518,10 +1518,23 @@ OUTPUT: JSON only. No markdown.
       const runAiAttempt = async (seedBase36) => {
         const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seedBase36}`;
         const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
+
         const parsedRaw = tryParseJsonLoose(aiJsonText);
         const parsed = coerceAiDataToPids(parsedRaw, pidByCanonical);
-        debug.attempts.push({ temperature: GEMINI_FREE_TEMPERATURE, parsed: !!parsed, sample: String(aiJsonText || '').slice(0, 160) });
-        if (!parsed) throw new Error('Invalid AI response');
+
+        debug.attempts.push({
+          temperature: GEMINI_FREE_TEMPERATURE,
+          parsed: !!parsed,
+          sample: String(aiJsonText || '').slice(0, 160),
+        });
+
+        // STRICT: if AI returned non-JSON, return a structured failure so client can fallback
+        if (!parsed) {
+          const err = new Error('Invalid AI response');
+          err.code = 'AI_INVALID_JSON';
+          throw err;
+        }
+
         let render = renderFromAiData(parsed, baseSkeleton);
 
         if (render.missing.size && (forceStrict || aiOnly)) {
@@ -1570,12 +1583,15 @@ OUTPUT: JSON only. No markdown.
         cacheKeyToStore = cachingEnabled ? freeTierCacheKey : null;
         shouldCacheResult = !!cacheKeyToStore;
       } else {
-        // If strict AI-only, do not fall back. Return a hard error.
+        // STRICT AI-only: let client fallback on *any* AI failure (including invalid JSON)
         if (aiOnly || noFallback || forceStrict) {
-          return res.status(503).json({
+          const msg = lastErr ? String(lastErr.message || lastErr) : 'AI failed';
+          debug.aiFailureKind = lastErr && lastErr.code ? String(lastErr.code) : 'AI_FAILURE';
+          return res.status(200).json({
             ok: false,
-            error: lastErr ? String(lastErr.message || lastErr) : 'AI response invalid; strict mode disallows fallback.',
-            debug
+            error: msg,
+            debug,
+            allowClientFallback: true
           });
         }
 

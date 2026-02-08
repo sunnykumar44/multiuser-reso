@@ -888,53 +888,98 @@ async function callGenerateAPI(payload) {
 
       setStatus('Generating via AI (strict)...');
 
-      const result = await callGenerateAPI({
-        profile: currentProfile,
-        jd: jdNow,
-        mode,
-        template,
-        scope,
-        nickname: effectiveNickname,
+      try {
+        const result = await callGenerateAPI({
+          profile: currentProfile,
+          jd: jdNow,
+          mode,
+          template,
+          scope,
+          nickname: effectiveNickname,
 
-        // STRICT: no fallback, AI only
-        aiOnly: true,
-        noFallback: true,
-        forceStrict: true,
+          // STRICT: no fallback, AI only
+          aiOnly: true,
+          noFallback: true,
+          forceStrict: true,
 
-        // keep your current cache behavior
-        forceFresh: true,
-        useCache: false,
-      });
+          // keep your current cache behavior
+          forceFresh: true,
+          useCache: false,
+        });
 
-      const serverHtml =
-        (result?.generated?.html) ? result.generated.html :
-        (result?.html) ? result.html :
-        null;
+        // NEW: strict AI failure can come back as 200 { ok:false, allowClientFallback:true }
+        if (result && result.ok === false && result.allowClientFallback) {
+          const html = clientBuildFallback(currentProfile || {}, jdNow, mode, template, scope, effectiveNickname);
 
-      if (!serverHtml) throw new Error('Server returned no usable HTML');
+          // Persist fallback HTML into draft so it becomes editable
+          draft.jd = jdNow;
+          draft.mode = mode;
+          draft.template = template;
+          draft.scope = scope;
+          draft.htmlOverride = String(html || '');
+          saveDraft(draft);
 
-      // Persist AI HTML and render it (this guarantees the preview changes after generation)
-      draft.jd = jdNow;
-      draft.mode = mode;
-      draft.template = template;
-      draft.scope = scope;
-      draft.htmlOverride = String(serverHtml || '');
-      saveDraft(draft);
+          // Render
+          if (paperEl) {
+            paperEl.innerHTML = draft.htmlOverride;
+            try { paperEl.contentEditable = true; } catch (_) {}
+            enableInlineEditing(paperEl);
+          }
 
-      if (paperEl) {
-        paperEl.innerHTML = draft.htmlOverride;
-        try { paperEl.contentEditable = true; } catch (_) {}
-        enableInlineEditing(paperEl);
+          pendingHtmlOverride = null;
+          lastSavedHtmlOverride = null;
+          const saveBtn = $('btnSaveEdits');
+          if (saveBtn) saveBtn.classList.remove('unsaved');
+
+          updateEditBadge();
+          setStatus(String(result.error || 'AI failed; showing profile-based fallback.'), 'err');
+          showToast('Using fallback resume', 'warn', 2200);
+          return;
+        }
+
+        const serverHtml =
+          (result?.generated?.html) ? result.generated.html :
+          (result?.html) ? result.html :
+          null;
+
+        if (!serverHtml) throw new Error('Server returned no usable HTML');
+
+        // Persist AI HTML and render it (this guarantees the preview changes after generation)
+        draft.jd = jdNow;
+        draft.mode = mode;
+        draft.template = template;
+        draft.scope = scope;
+        draft.htmlOverride = String(serverHtml || '');
+        saveDraft(draft);
+
+        if (paperEl) {
+          paperEl.innerHTML = draft.htmlOverride;
+          try { paperEl.contentEditable = true; } catch (_) {}
+          enableInlineEditing(paperEl);
+        }
+
+        pendingHtmlOverride = null;
+        lastSavedHtmlOverride = null;
+        const saveBtn = $('btnSaveEdits');
+        if (saveBtn) saveBtn.classList.remove('unsaved');
+
+        updateEditBadge();
+        setStatus('Generated (AI)', 'ok');
+        showToast('Generated', 'success', 1600);
+      } catch (err) {
+        console.error('Generate click error:', err);
+
+        if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
+          triggerFreeTierCooldown(btn);
+          setStatus(FREE_TIER_MESSAGE, 'err');
+          showToast(FREE_TIER_MESSAGE, 'warn');
+          return;
+        }
+
+        // Strict mode: show the server error and do NOT change preview
+        setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
+        showToast('Generation failed', 'warn');
       }
-
-      pendingHtmlOverride = null;
-      lastSavedHtmlOverride = null;
-      const saveBtn = $('btnSaveEdits');
-      if (saveBtn) saveBtn.classList.remove('unsaved');
-
-      updateEditBadge();
-      setStatus('Generated (AI)', 'ok');
-      showToast('Generated', 'success', 1600);
     } catch (err) {
       console.error('Generate click error:', err);
 
@@ -1394,53 +1439,98 @@ if (btnGen) {
 
       setStatus('Generating via AI (strict)...');
 
-      const result = await callGenerateAPI({
-        profile: currentProfile,
-        jd: jdNow,
-        mode,
-        template,
-        scope,
-        nickname: effectiveNickname,
+      try {
+        const result = await callGenerateAPI({
+          profile: currentProfile,
+          jd: jdNow,
+          mode,
+          template,
+          scope,
+          nickname: effectiveNickname,
 
-        // STRICT: no fallback, AI only
-        aiOnly: true,
-        noFallback: true,
-        forceStrict: true,
+          // STRICT: no fallback, AI only
+          aiOnly: true,
+          noFallback: true,
+          forceStrict: true,
 
-        // keep your current cache behavior
-        forceFresh: true,
-        useCache: false,
-      });
+          // keep your current cache behavior
+          forceFresh: true,
+          useCache: false,
+        });
 
-      const serverHtml =
-        (result?.generated?.html) ? result.generated.html :
-        (result?.html) ? result.html :
-        null;
+        // NEW: strict AI failure can come back as 200 { ok:false, allowClientFallback:true }
+        if (result && result.ok === false && result.allowClientFallback) {
+          const html = clientBuildFallback(currentProfile || {}, jdNow, mode, template, scope, effectiveNickname);
 
-      if (!serverHtml) throw new Error('Server returned no usable HTML');
+          // Persist fallback HTML into draft so it becomes editable
+          draft.jd = jdNow;
+          draft.mode = mode;
+          draft.template = template;
+          draft.scope = scope;
+          draft.htmlOverride = String(html || '');
+          saveDraft(draft);
 
-      // Persist AI HTML and render it (this guarantees the preview changes after generation)
-      draft.jd = jdNow;
-      draft.mode = mode;
-      draft.template = template;
-      draft.scope = scope;
-      draft.htmlOverride = String(serverHtml || '');
-      saveDraft(draft);
+          // Render
+          if (paperEl) {
+            paperEl.innerHTML = draft.htmlOverride;
+            try { paperEl.contentEditable = true; } catch (_) {}
+            enableInlineEditing(paperEl);
+          }
 
-      if (paperEl) {
-        paperEl.innerHTML = draft.htmlOverride;
-        try { paperEl.contentEditable = true; } catch (_) {}
-        enableInlineEditing(paperEl);
+          pendingHtmlOverride = null;
+          lastSavedHtmlOverride = null;
+          const saveBtn = $('btnSaveEdits');
+          if (saveBtn) saveBtn.classList.remove('unsaved');
+
+          updateEditBadge();
+          setStatus(String(result.error || 'AI failed; showing profile-based fallback.'), 'err');
+          showToast('Using fallback resume', 'warn', 2200);
+          return;
+        }
+
+        const serverHtml =
+          (result?.generated?.html) ? result.generated.html :
+          (result?.html) ? result.html :
+          null;
+
+        if (!serverHtml) throw new Error('Server returned no usable HTML');
+
+        // Persist AI HTML and render it (this guarantees the preview changes after generation)
+        draft.jd = jdNow;
+        draft.mode = mode;
+        draft.template = template;
+        draft.scope = scope;
+        draft.htmlOverride = String(serverHtml || '');
+        saveDraft(draft);
+
+        if (paperEl) {
+          paperEl.innerHTML = draft.htmlOverride;
+          try { paperEl.contentEditable = true; } catch (_) {}
+          enableInlineEditing(paperEl);
+        }
+
+        pendingHtmlOverride = null;
+        lastSavedHtmlOverride = null;
+        const saveBtn = $('btnSaveEdits');
+        if (saveBtn) saveBtn.classList.remove('unsaved');
+
+        updateEditBadge();
+        setStatus('Generated (AI)', 'ok');
+        showToast('Generated', 'success', 1600);
+      } catch (err) {
+        console.error('Generate click error:', err);
+
+        if (err?.status === 429 || String(err?.data?.error || '').toLowerCase().includes('daily')) {
+          triggerFreeTierCooldown(btn);
+          setStatus(FREE_TIER_MESSAGE, 'err');
+          showToast(FREE_TIER_MESSAGE, 'warn');
+          return;
+        }
+
+        // Strict mode: show the server error and do NOT change preview
+        setStatus(String(err?.data?.error || err?.message || 'Generation failed'), 'err');
+        showToast('Generation failed', 'warn');
       }
-
-      pendingHtmlOverride = null;
-      lastSavedHtmlOverride = null;
-      const saveBtn = $('btnSaveEdits');
-      if (saveBtn) saveBtn.classList.remove('unsaved');
-
-      updateEditBadge();
-      setStatus('Generated (AI)', 'ok');
-      showToast('Generated', 'success', 1600);
     } catch (err) {
       console.error('Generate click error:', err);
 
