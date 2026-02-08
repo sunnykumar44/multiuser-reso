@@ -49,6 +49,16 @@ function defaultDraft() {
   };
 }
 
+// Minimal HTML escaper for client fallback rendering
+// eslint-disable-next-line no-var
+var escapeHtml = (typeof escapeHtml === 'function') ? escapeHtml : (str = '') =>
+  String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 // Local selector helpers (avoid clobbering libraries like jQuery on hosted builds)
 // Use guarded `var` to tolerate accidental duplicate injection in this file.
 // eslint-disable-next-line no-var
