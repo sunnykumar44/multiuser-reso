@@ -1043,24 +1043,24 @@ function handleGenerateError(err, btn, currentProfile, jdNow, mode, template, sc
 
 //# sourceMappingURL=resume-main.js.map
 function clientBuildFallback(profile = {}, jd = '', mode = 'ats', template = 'classic', scope = [], nickname) {
+  // local safe escaper (use global escapeHtml if present; otherwise provide a minimal fallback)
+  const esc = (typeof escapeHtml === 'function') ? escapeHtml : (str = '') =>
+    String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
   const displayName = (profile && profile.fullName) || nickname || 'User';
   const jdSnippet = String(jd || '').slice(0, 400);
   const parts = [];
-  parts.push(`<div class="generated-resume"><h2>Generated resume for ${escapeHtml(displayName)}</h2><p>Mode: ${escapeHtml(mode)}, Template: ${escapeHtml(template)}</p>`);
+  parts.push(`<div class="generated-resume"><h2>Generated resume for ${esc(displayName)}</h2><p>Mode: ${esc(mode)}, Template: ${esc(template)}</p>`);
   const sections = (Array.isArray(scope) && scope.length) ? scope : ['Summary','Skills','Experience'];
   for (const sec of sections) {
     const key = String(sec || '').trim().toLowerCase();
     if (key === 'summary') {
-      if (profile.summary) parts.push(`<section><h3>Summary</h3><p>${escapeHtml(profile.summary)}</p></section>`);
-    } else if (key === 'skills') {
-      const skills = Array.isArray(profile.skills) ? profile.skills : (profile.skills ? String(profile.skills).split(/\r?\n/) : []);
-      if (skills && skills.length) { parts.push('<section><h3>Skills</h3><ul>'); skills.forEach(s=>parts.push(`<li>${escapeHtml(s)}</li>`)); parts.push('</ul></section>'); }
-    } else if (key === 'education') {
-      // Prefer structured education array, then educationEntries, then legacy fields
-      const eds = Array.isArray(profile.education) ? profile.education : (Array.isArray(profile.educationEntries) ? profile.educationEntries : null);
-      if (eds && eds.length) {
-        parts.push('<section><h3>Education</h3>');
-        eds.forEach(ed => {
+      if
           const inst = ed.institution || ed.school || ed.college || '';
           const degree = ed.degree || ed.program || ed.branch || '';
           const year = ed.year || ed.graduationYear || ed.endYear || ((ed.startYear && ed.endYear) ? `${ed.startYear} - ${ed.endYear}` : '');
