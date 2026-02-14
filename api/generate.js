@@ -114,6 +114,22 @@ function tryParseJsonLoose(text) {
   return null;
 }
 
+// Even more forgiving parser: trims code fences, grabs the outermost braces, and
+// strips dangling commas before attempting JSON.parse. This is only used to
+// rescue slightly malformed model output in strict mode (no client fallback).
+function tryParseJsonSalvage(text) {
+  if (!text) return null;
+  let t = String(text || '').replace(/```json|```/gi, '').trim();
+  const first = t.indexOf('{');
+  const last = t.lastIndexOf('}');
+  if (first === -1 || last === -1 || last <= first) return null;
+  t = t.slice(first, last + 1);
+  // remove trailing commas before closing braces/brackets
+  t = t.replace(/,\s*([}\]])/g, '$1');
+  try { return JSON.parse(t); } catch (_) {}
+  return null;
+}
+
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
 // Extracts meaningful technical and soft skills from JD
 function extractKeywordsFromJD(jd, type = 'all') {
@@ -1519,7 +1535,7 @@ OUTPUT: JSON only. No markdown.
         const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seedBase36}`;
         const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
 
-        const parsedRaw = tryParseJsonLoose(aiJsonText);
+        const parsedRaw = tryParseJsonLoose(aiJsonText) || tryParseJsonSalvage(aiJsonText);
         const parsed = coerceAiDataToPids(parsedRaw, pidByCanonical);
 
         debug.attempts.push({
