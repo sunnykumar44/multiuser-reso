@@ -149,6 +149,33 @@ function tryParseJsonRepair(text) {
   return null;
 }
 
+// Final fallback: extract simple key/value pairs from malformed JSON-ish text.
+// This keeps strict mode "no fallback" while salvaging common fields.
+function tryParseKeyValuePairs(text) {
+  if (!text) return null;
+  const out = {};
+  const kv = String(text || '');
+  // capture "key": "value"
+  const re = /\"([A-Za-z0-9 _-]{3,40})\"\\s*:\\s*\"([^\"]{0,400})\"/g;
+  let m;
+  while ((m = re.exec(kv)) !== null) {
+    const key = m[1].trim().toLowerCase();
+    const val = m[2].trim();
+    if (!val) continue;
+    if (!out[key]) out[key] = val;
+  }
+  // quick list extraction for skills if present like ["Python","SQL"]
+  const skillsMatch = kv.match(/\"skills\"\\s*:\\s*\\[(.*?)\\]/);
+  if (skillsMatch && !out.skills) {
+    const items = skillsMatch[1]
+      .split(/\"\\s*,\\s*\"/)
+      .map(s => s.replace(/\"/g, '').trim())
+      .filter(Boolean);
+    if (items.length) out.skills = items;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
 // Extracts meaningful technical and soft skills from JD
 function extractKeywordsFromJD(jd, type = 'all') {
@@ -1165,6 +1192,36 @@ VARIATION_SEED: ${seed}
     function coerceAiDataToPids(aiData, pidMap) {
       if (!aiData || typeof aiData !== 'object') return null;
       const out = Object.assign({}, aiData);
+
+      // Map common flat keys into expected pids when model returns flat structure
+      const flatToPid = {
+        summary: 'summary',
+        intro: 'summary',
+        objective: 'summary',
+        fullname: 'summary', // sometimes summary text leaks here; keep minimal
+        skills: 'technical skills',
+        technicalskills: 'technical skills',
+        work: 'work experience',
+        workexperience: 'work experience',
+        experience: 'work experience',
+        projects: 'projects',
+        education: 'education',
+        certifications: 'certifications',
+        certs: 'certifications',
+        achievements: 'achievements',
+        awards: 'achievements',
+        charactertraits: 'character traits',
+        softskills: 'character traits',
+      };
+
+      Object.entries(flatToPid).forEach(([k, pidName]) => {
+        if (out[pidName]) return;
+        const v = out[k];
+        if (v === undefined) return;
+        if (Array.isArray(v)) out[pidName] = v.join(' | ');
+        else out[pidName] = String(v || '').trim();
+      });
+
       const keyMap = {
         summary: ['summary', 'intro', 'objective'],
         'technical skills': ['technicalSkills', 'skills', 'hardSkills'],
@@ -1559,7 +1616,8 @@ OUTPUT: JSON only. No markdown.
         const parsedRaw =
           tryParseJsonLoose(aiJsonText) ||
           tryParseJsonSalvage(aiJsonText) ||
-          tryParseJsonRepair(aiJsonText);
+          tryParseJsonRepair(aiJsonText) ||
+          tryParseKeyValuePairs(aiJsonText);
         const parsed = coerceAiDataToPids(parsedRaw, pidByCanonical);
 
         debug.attempts.push({
@@ -1585,7 +1643,11 @@ OUTPUT: JSON only. No markdown.
             try {
               const repairPrompt = buildRepairPrompt(missingPids, rs);
               const repairText = await callGeminiFlash(repairPrompt, { temperature: 1.05, maxOutputTokens: 1800 });
-              const repairParsed = tryParseJsonLoose(repairText) || tryParseJsonSalvage(repairText) || tryParseJsonRepair(repairText);
+              const repairParsed =
+                tryParseJsonLoose(repairText) ||
+                tryParseJsonSalvage(repairText) ||
+                tryParseJsonRepair(repairText) ||
+                tryParseKeyValuePairs(repairText);
               debug.attempts.push({ temperature: 1.05, parsed: !!repairParsed, repair: true, sample: String(repairText || '').slice(0, 160) });
               if (repairParsed) {
                 const merged = Object.assign({}, parsed, repairParsed);
