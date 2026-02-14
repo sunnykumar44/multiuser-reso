@@ -9,7 +9,8 @@ const GEMINI_FREE_MODELS = [
   'models/gemini-1.5-flash-002',
   'models/gemini-1.5-flash',
 ];
-const GEMINI_FREE_TEMPERATURE = 0.95;
+// Prefer low temperature for deterministic, schema-compliant output
+const GEMINI_FREE_TEMPERATURE = 0.2;
 const FREE_CACHE_MAX_ENTRIES = Number(process.env.FREE_CACHE_MAX_ENTRIES) || 500;
 globalThis.__FREE_GEMINI_CACHE__ = globalThis.__FREE_GEMINI_CACHE__ || new Map();
 const FREE_GEMINI_CACHE = globalThis.__FREE_GEMINI_CACHE__;
@@ -423,7 +424,7 @@ function ensureEducationInHtml({ html, profile } = {}) {
 // --- CONSTANTS ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_KEY || process.env.GCP_API_KEY;
 // Optional: prefer a specific Gemini model first (e.g., "models/gemini-3-flash-preview")
-const GEMINI_MODEL_PREFERRED = (process.env.GEMINI_MODEL || process.env.GEMINI_PREFERRED_MODEL || '').trim();
+const GEMINI_MODEL_PREFERRED = (process.env.GEMINI_MODEL || process.env.GEMINI_PREFERRED_MODEL || 'gemini-2.5-flash').trim();
 
 const RESUME_CSS = `
   <style>
@@ -724,7 +725,7 @@ async function callGeminiFlash(promptText, opts = {}) {
 
   const keyQs = `key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const temperature = (typeof opts.temperature === 'number') ? opts.temperature : GEMINI_FREE_TEMPERATURE;
-  const maxOutputTokens = opts.maxOutputTokens || 2600;
+  const maxOutputTokens = opts.maxOutputTokens || 3072;
 
   const body = {
     contents: [{ parts: [{ text: promptText }] }],
@@ -1271,6 +1272,8 @@ RULES:
 2) Infer role-appropriate technical skills; do not copy JD verbatim.
 3) Skills must be used in Projects; Projects support Experience; Certs match Skills; Achievements come from Projects/Experience.
 4) Return VALID JSON ONLY with these keys: ${Object.keys(aiPrompts).join(', ')}
+5) Return ALL requested keys; if a section is unknown, use empty array/list or empty string.
+6) Output JSON only. No markdown. No extra prose outside JSON.
 
 SECTION INSTRUCTIONS:
 ${Object.entries(aiPrompts).map(([k, v]) => `- ${k}: ${v} || VARIATION_NONCE:${requestSeed}:${k}`).join('\n')}
