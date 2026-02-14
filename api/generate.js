@@ -1561,7 +1561,7 @@ OUTPUT: JSON only. No markdown.
             try {
               const repairPrompt = buildRepairPrompt(missingPids, rs);
               const repairText = await callGeminiFlash(repairPrompt, { temperature: 1.05, maxOutputTokens: 1800 });
-              const repairParsed = tryParseJsonLoose(repairText);
+              const repairParsed = tryParseJsonLoose(repairText) || tryParseJsonSalvage(repairText);
               debug.attempts.push({ temperature: 1.05, parsed: !!repairParsed, repair: true, sample: String(repairText || '').slice(0, 160) });
               if (repairParsed) {
                 const merged = Object.assign({}, parsed, repairParsed);
@@ -1574,7 +1574,9 @@ OUTPUT: JSON only. No markdown.
               debug.attempts.push({ temperature: 1.05, parsed: false, repair: true, error: String(repairErr && repairErr.message ? repairErr.message : repairErr) });
             }
           }
-          throw new Error(`AI missing required sections after repair: ${Array.from(render.missing).join(', ')}`);
+          // Strict mode, but still produce partial HTML instead of failing hard.
+          debug.missing = missingPids;
+          render.missing = new Set(); // accept partial render
         }
         return { parsed, render };
       };
