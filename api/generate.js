@@ -713,7 +713,9 @@ async function callGeminiFlash(promptText, opts = {}) {
     }
 
     const j = await resp.json();
-    const candidate = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const candidate = (j?.candidates?.[0]?.content?.parts || [])
+      .map(p => p?.text || '')
+      .join('');
     if (!candidate) {
       const err = new Error('No response from AI');
       err.status = 502;
