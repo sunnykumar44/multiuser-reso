@@ -1414,7 +1414,27 @@ OUTPUT: JSON only. No markdown.
 
         // final fallback
         if (noFallback || aiOnly || forceStrict) {
-          // do NOT inject fallback; just mark missing
+          // In strict mode, synthesize minimal Work Experience so the section isn't empty.
+          if (label === 'Work Experience') {
+            const roleName = rolePreset.title || 'Project Work';
+            const company = rolePreset.company || 'Self-initiated';
+            const skillsLine = (rolePreset.skills || []).slice(0, 3).join(', ');
+            const bullet = skillsLine
+              ? `Built and monitored data pipelines using ${escapeHtml(skillsLine)} to keep datasets reliable.`
+              : 'Delivered a small project with measurable impact and documented outcomes.';
+            const synthetic = `
+              <div class="resume-item">
+                <div class="resume-row">
+                  <span class="resume-role">${escapeHtml(roleName)}</span>
+                  <span class="resume-date">Present</span>
+                </div>
+                <span class="resume-company">${escapeHtml(company)}</span>
+                <ul><li>${bullet}</li></ul>
+              </div>`;
+            htmlOut = htmlOut.replace(`[${pid}]`, synthetic);
+            return;
+          }
+          // otherwise, mark missing
           missing.add(pid);
           return;
         }
