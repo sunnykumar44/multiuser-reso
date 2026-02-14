@@ -130,6 +130,25 @@ function tryParseJsonSalvage(text) {
   return null;
 }
 
+// Last-resort repair: balance braces/brackets and strip control chars
+function tryParseJsonRepair(text) {
+  if (!text) return null;
+  let t = String(text || '').replace(/```json|```/gi, '').trim();
+  // Strip non-printable control chars
+  t = t.replace(/[\u0000-\u001F]+/g, '');
+  // Remove trailing commas
+  t = t.replace(/,\s*([}\]])/g, '$1');
+  // Balance braces
+  const openCurly = (t.match(/{/g) || []).length;
+  const closeCurly = (t.match(/}/g) || []).length;
+  const openSquare = (t.match(/\[/g) || []).length;
+  const closeSquare = (t.match(/]/g) || []).length;
+  if (closeCurly < openCurly) t = t + '}'.repeat(openCurly - closeCurly);
+  if (closeSquare < openSquare) t = t + ']'.repeat(openSquare - closeSquare);
+  try { return JSON.parse(t); } catch (_) {}
+  return null;
+}
+
 // --- HELPER 1: ENHANCED KEYWORD EXTRACTOR ---
 // Extracts meaningful technical and soft skills from JD
 function extractKeywordsFromJD(jd, type = 'all') {
@@ -1537,7 +1556,10 @@ OUTPUT: JSON only. No markdown.
         const prompt = intelligentPrompt + `\nVARIATION_SEED: ${seedBase36}`;
         const aiJsonText = await callGeminiFlash(prompt, { temperature: GEMINI_FREE_TEMPERATURE, maxOutputTokens: 3000 });
 
-        const parsedRaw = tryParseJsonLoose(aiJsonText) || tryParseJsonSalvage(aiJsonText);
+        const parsedRaw =
+          tryParseJsonLoose(aiJsonText) ||
+          tryParseJsonSalvage(aiJsonText) ||
+          tryParseJsonRepair(aiJsonText);
         const parsed = coerceAiDataToPids(parsedRaw, pidByCanonical);
 
         debug.attempts.push({
@@ -1563,7 +1585,7 @@ OUTPUT: JSON only. No markdown.
             try {
               const repairPrompt = buildRepairPrompt(missingPids, rs);
               const repairText = await callGeminiFlash(repairPrompt, { temperature: 1.05, maxOutputTokens: 1800 });
-              const repairParsed = tryParseJsonLoose(repairText) || tryParseJsonSalvage(repairText);
+              const repairParsed = tryParseJsonLoose(repairText) || tryParseJsonSalvage(repairText) || tryParseJsonRepair(repairText);
               debug.attempts.push({ temperature: 1.05, parsed: !!repairParsed, repair: true, sample: String(repairText || '').slice(0, 160) });
               if (repairParsed) {
                 const merged = Object.assign({}, parsed, repairParsed);
