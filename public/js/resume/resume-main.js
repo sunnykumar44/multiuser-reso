@@ -933,8 +933,9 @@ function handleGenerateError(err, btn, currentProfile, jdNow, mode, template, sc
 
         // NEW: strict AI failure can come back as 200 { ok:false, allowClientFallback:true }
         if (result && result.ok === false && result.allowClientFallback) {
-          setStatus(String(result.error || 'AI generation failed on server. Please retry.'), 'err');
-          showToast('AI unavailable', 'warn', 2200);
+          // Client-side fallback disabled — surface the server error and abort.
+          setStatus(String(result.error || 'AI failed (no client fallback allowed).'), 'err');
+          showToast('AI failed', 'warn');
           return;
         }
 
@@ -978,7 +979,9 @@ function handleGenerateError(err, btn, currentProfile, jdNow, mode, template, sc
   });
 })();
 
-(function attachEditButtons() {
+// --------------------
+// Edit buttons (Save / Reset / Undo)
+// --------------------
 (function attachEditButtons() {
   const btnSaveEdits = $('btnSaveEdits');
   if (btnSaveEdits) {
@@ -1037,6 +1040,9 @@ function handleGenerateError(err, btn, currentProfile, jdNow, mode, template, sc
   }
 })();
 
+// --------------------
+// Toolbar buttons (PDF / Edit / Clear)
+// --------------------
 (function wireToolbarButtons() {
   const btnPdf = $('btnPdf');
   const btnEdit = $('btnEdit');
@@ -1286,6 +1292,3 @@ try {
     paperNode.__editableObserver.observe(paperNode, { childList: true, subtree: true });
   }
 } catch (_) {}
-
-// public/js/resume/resume-main.js
-// ...existing code...
