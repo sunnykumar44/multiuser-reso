@@ -1464,6 +1464,7 @@ OUTPUT: JSON only. No markdown.
     ];
 
     let sectionsToRender = [];
+    const resumeSections = [];
 
     if (Array.isArray(scope) && scope.length) {
       // Use client-provided scope, normalize via canonicalSectionName
@@ -1505,6 +1506,7 @@ OUTPUT: JSON only. No markdown.
         aiTypes['sec_1'] = 'summary';
         aiLabels['sec_1'] = 'Summary';
         pidByCanonical['summary'] = 'sec_1';
+        resumeSections.push(`<section class="resume-section"><div class="resume-section-title">Summary</div><div>[sec_1]</div></section>`);
         sectionCounter++;
         continue;
       }
@@ -1516,6 +1518,7 @@ OUTPUT: JSON only. No markdown.
         aiPrompts[pid] = `List relevant work experiences for a candidate with skills in ${rolePreset.skills.join(', ')}. Focus on achievements and impact.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Work Experience';
+        resumeSections.push(`<section class="resume-section"><div class="resume-section-title">Work Experience</div><div>[${pid}]</div></section>`);
         continue;
       }
 
@@ -1526,6 +1529,7 @@ OUTPUT: JSON only. No markdown.
         aiPrompts[pid] = `Detail the educational background, including degrees, majors, and institutions. Emphasize relevant coursework or honors.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Education';
+        resumeSections.push(`<section class="resume-section"><div class="resume-section-title">Education</div><div>[${pid}]</div></section>`);
         continue;
       }
 
@@ -1537,6 +1541,7 @@ OUTPUT: JSON only. No markdown.
         aiPrompts[pid] = `List technical skills relevant to ${finalJD}. Include programming languages, tools, and technologies.`;
         aiTypes[pid] = 'chips';
         aiLabels[pid] = 'Technical Skills';
+        resumeSections.push(`<section class="resume-section"><div class="resume-section-title">Technical Skills</div><div class="skills">[${pid}]</div></section>`);
         continue;
       }
 
@@ -1547,6 +1552,7 @@ OUTPUT: JSON only. No markdown.
         aiPrompts[pid] = `Mention any relevant certifications. Focus on those that enhance the candidate's qualifications for ${finalJD}.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Certifications';
+        resumeSections.push(`<section class="resume-section"><div class="resume-section-title">Certifications</div><ul>[${pid}]</ul></section>`);
         continue;
       }
 
@@ -1557,6 +1563,7 @@ OUTPUT: JSON only. No markdown.
         aiPrompts[pid] = `Describe key projects that demonstrate the candidate's skills in ${rolePreset.skills.join(', ')}. Highlight the candidate's role and the technologies used.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Projects';
+        resumeSections.push(`<section class="resume-section"><div class="resume-section-title">Projects</div><ul>[${pid}]</ul></section>`);
         continue;
       }
 
@@ -1567,6 +1574,7 @@ OUTPUT: JSON only. No markdown.
         aiPrompts[pid] = `List notable achievements that would impress employers for the role of ${finalJD}. Quantify results when possible.`;
         aiTypes[pid] = 'list';
         aiLabels[pid] = 'Achievements';
+        resumeSections.push(`<section class="resume-section"><div class="resume-section-title">Achievements</div><ul>[${pid}]</ul></section>`);
         continue;
       }
 
@@ -1579,9 +1587,13 @@ OUTPUT: JSON only. No markdown.
         aiPrompts[pid] = `Describe the top 6 soft skills or character traits that best describe the candidate. Relate them to the job role where possible.`;
         aiTypes[pid] = 'chips';
         aiLabels[pid] = 'Character Traits';
+        resumeSections.push(`<section class="resume-section"><div class="resume-section-title">Character Traits</div><div class="traits">[${pid}]</div></section>`);
         continue;
       }
     }
+
+    // Build resume body HTML with placeholders for each section
+    resumeBodyHtml = resumeSections.join('\\n');
 
     const freeTierCacheKey = finalJD ? buildFreeCacheKey(profile, finalJD) : null;
     const cachingEnabled = useCache && !forceFresh;
