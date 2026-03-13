@@ -1,4 +1,8 @@
 {
+  "name": "multiuser-reso",
+  "version": "1.0.0",
+  "description": "Multiuser resume generator",
+  "main": "resume-main.js",
   "scripts": {
     "start": "node resume-main.js"
   },
