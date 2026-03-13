@@ -1,13 +1,12 @@
 {
   "name": "multiuser-reso",
   "version": "1.0.0",
-  "description": "Multiuser resume generator",
-  "main": "resume-main.js",
   "scripts": {
-    "start": "node resume-main.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "firebase-admin": "^13.6.0",
-    "slugify": "^1.6.6"
+    "slugify": "^1.6.6",
+    "express": "^4.19.2"
   }
 }
