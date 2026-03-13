@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "start": "node resume-main.js"
+  },
   "dependencies": {
     "firebase-admin": "^13.6.0",
     "slugify": "^1.6.6"
