@@ -6,12 +6,11 @@ const app = express();
 // serve static files
 app.use(express.static(path.join(__dirname, "public")));
 
-// root route
+// default route
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public/index.html"));
 });
 
-// OpenShift port
 const port = process.env.PORT || 8080;
 
 app.listen(port, () => {
